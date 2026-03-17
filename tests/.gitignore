@@ -1,0 +1,13 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test output and coverage
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+.cache/

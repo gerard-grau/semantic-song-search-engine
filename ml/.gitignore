@@ -1,0 +1,17 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Type checking
+.mypy_cache/
+.ruff_cache/
+
+# Model checkpoints and training artifacts
+checkpoints/
+runs/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+wandb/

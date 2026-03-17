@@ -1,34 +1,7 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.python-version
-
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
-
-# Packaging and build
-build/
-dist/
-*.egg-info/
-.eggs/
-pip-wheel-metadata/
-
-# Testing and coverage
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-.coverage.*
-htmlcov/
-.cache/
-
-# Jupyter
-.ipynb_checkpoints/
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # IDE/editor
 .vscode/
@@ -36,35 +9,16 @@ htmlcov/
 *.swp
 *.swo
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Environment and secrets
+# Secrets and local environment overrides
 .env
 .env.*
 !.env.example
+!.env.local.example
+.envrc
 
-# Project data and artifacts
-data/raw/**
-!data/raw/.gitignore
-data/processed/**
-!data/processed/.gitignore
-artifacts/
-models/checkpoints/
-ml/checkpoints/
-ml/runs/
-
-# Local databases and dumps
-*.sqlite3
-*.db
-*.sql
-*.sql.gz
-*.dump
-
-# Node/frontend leftovers
-node_modules/
+# Python virtual environments (root level)
+.venv/
+venv/
+env/
+ENV/
+.python-version

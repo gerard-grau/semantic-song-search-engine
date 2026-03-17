@@ -1,0 +1,23 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Type checking
+.mypy_cache/
+.ruff_cache/
+
+# Local database files
+*.sqlite3
+*.db
+*.sql
+*.sql.gz
+*.dump
