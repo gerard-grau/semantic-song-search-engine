@@ -239,6 +239,22 @@ python -m youtube_audio_pipeline.main \
 	--flush-every 250
 ```
 
+### Benchmark on target server
+
+Run this on the destination server to choose the best worker count for that machine:
+
+```bash
+python -m youtube_audio_pipeline.benchmark \
+	--urls-file youtube_audio_pipeline/urls.benchmark.example.txt \
+	--max-urls 10 \
+	--workers-list 1,2,4,8,12,16,22 \
+	--repeats 1
+```
+
+Summary file:
+
+- `data/processed/youtube_pipeline_benchmark.csv`
+
 ### Module-specific docs
 
 - [youtube_audio_pipeline/README.md](youtube_audio_pipeline/README.md)

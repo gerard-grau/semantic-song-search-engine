@@ -25,7 +25,9 @@ Compatibility note:
 - [downloader.py](downloader.py): download to RAM-disk
 - [analyzer.py](analyzer.py): feature extraction and guaranteed cleanup
 - [main.py](main.py): CLI runner with parallel processing and batch CSV flushes
+- [benchmark.py](benchmark.py): server-side throughput benchmark to tune worker count
 - [urls.example.txt](urls.example.txt): sample URL input file
+- [urls.benchmark.example.txt](urls.benchmark.example.txt): benchmark URL sample
 
 ## Requirements
 
@@ -87,3 +89,36 @@ python -m youtube_audio_pipeline.main \
 - If `/dev/shm` is unavailable, the downloader falls back to the OS temp directory.
 - This module assumes URL access rights and legal usage are handled by the operator.
 - For very large runs, monitor RAM usage and tune `--workers`.
+
+## Benchmark on the target server
+
+Because performance is machine-dependent, benchmark on the same server where production runs will execute.
+
+Example benchmark run (10 URLs, 1 repeat):
+
+```bash
+python -m youtube_audio_pipeline.benchmark \
+  --urls-file youtube_audio_pipeline/urls.benchmark.example.txt \
+  --max-urls 10 \
+  --workers-list 1,2,4,8,12,16,22 \
+  --repeats 1 \
+  --flush-every 200
+```
+
+Benchmark summary output:
+
+- `data/processed/youtube_pipeline_benchmark.csv`
+
+How to choose workers:
+
+- Prefer the highest `urls_per_second`.
+- Require `success_rate` close to `1.0`.
+- If success rate drops at high workers, choose the best stable lower value.
+
+Keep per-run feature CSVs for inspection:
+
+```bash
+python -m youtube_audio_pipeline.benchmark \
+  --urls-file youtube_audio_pipeline/urls.benchmark.example.txt \
+  --keep-run-csv
+```

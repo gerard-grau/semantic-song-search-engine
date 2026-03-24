@@ -1,0 +1,12 @@
+# Use a representative sample from your production-like dataset
+# Keep one URL per line
+https://www.youtube.com/watch?v=jNQXAC9IVRw
+https://www.youtube.com/watch?v=dQw4w9WgXcQ
+https://www.youtube.com/watch?v=3JZ_D3ELwOQ
+https://www.youtube.com/watch?v=kXYiU_JCYtU
+https://www.youtube.com/watch?v=9bZkp7q19f0
+https://www.youtube.com/watch?v=OPf0YbXqDm0
+https://www.youtube.com/watch?v=fJ9rUzIMcZQ
+https://www.youtube.com/watch?v=oRdxUFDoQe0
+https://www.youtube.com/watch?v=CevxZvSJLk8
+https://www.youtube.com/watch?v=RgKAFK5djSk

@@ -142,6 +142,24 @@ Default output:
 
 - `data/processed/youtube_song_characteristics.csv`
 
+### Benchmark on deployment server
+
+Run tuning benchmarks on the same machine where you will process large batches.
+
+```bash
+python -m youtube_audio_pipeline.benchmark \
+	--urls-file youtube_audio_pipeline/urls.benchmark.example.txt \
+	--max-urls 10 \
+	--workers-list 1,2,4,8,12,16,22 \
+	--repeats 1
+```
+
+Benchmark summary CSV:
+
+- `data/processed/youtube_pipeline_benchmark.csv`
+
+Pick the worker count with the highest `urls_per_second` while keeping `success_rate` near `1.0`.
+
 ## Current limitations
 
 - no MariaDB connection yet
