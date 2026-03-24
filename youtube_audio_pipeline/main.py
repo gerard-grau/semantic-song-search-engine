@@ -4,8 +4,8 @@ import argparse
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .analyzer import analyze_and_discard, save_to_dataframe
-from .downloader import download_to_ram
+from youtube_audio_pipeline.analyzer import analyze_and_discard, save_to_dataframe
+from youtube_audio_pipeline.downloader import download_to_ram
 
 
 def load_urls(urls_file: str | None, urls_cli: list[str] | None) -> list[str]:

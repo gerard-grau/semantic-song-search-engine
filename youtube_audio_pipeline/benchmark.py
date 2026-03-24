@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .main import load_urls, run_pipeline
+from youtube_audio_pipeline.main import load_urls, run_pipeline
 
 
 def parse_workers(workers_arg: str) -> list[int]:

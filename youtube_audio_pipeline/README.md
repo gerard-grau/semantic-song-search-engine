@@ -61,6 +61,17 @@ From repository root:
 python -m youtube_audio_pipeline.main --urls-file youtube_audio_pipeline/urls.example.txt
 ```
 
+Shorthand (equivalent):
+
+```bash
+python -m youtube_audio_pipeline --urls-file youtube_audio_pipeline/urls.example.txt
+```
+
+Important:
+
+- Prefer `python -m ...` execution from the repository root.
+- Avoid `python main.py` from inside [youtube_audio_pipeline](youtube_audio_pipeline), because package imports are not reliably resolvable in that mode.
+
 CSV output default:
 
 - `data/processed/youtube_song_characteristics.csv`
