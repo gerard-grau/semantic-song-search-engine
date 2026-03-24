@@ -6,39 +6,64 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from youtube_audio_pipeline.analyzer import analyze_and_discard, save_to_dataframe
 from youtube_audio_pipeline.downloader import download_to_ram
+from youtube_audio_pipeline.youtube_utils import canonical_watch_url, extract_video_id, normalize_youtube_input
 
 
-def load_urls(urls_file: str | None, urls_cli: list[str] | None) -> list[str]:
-    urls: list[str] = []
+def load_urls(urls_file: str | None, urls_cli: list[str] | None) -> list[dict[str, str | None]]:
+    raw_values: list[str] = []
 
     if urls_file:
         with open(urls_file, "r", encoding="utf-8") as handle:
             for line in handle:
                 candidate = line.strip()
                 if candidate and not candidate.startswith("#"):
-                    urls.append(candidate)
+                    raw_values.append(candidate)
 
     if urls_cli:
-        urls.extend(urls_cli)
+        raw_values.extend(urls_cli)
 
-    unique_urls: list[str] = []
+    normalized_inputs: list[dict[str, str | None]] = []
     seen: set[str] = set()
-    for url in urls:
-        if url not in seen:
-            seen.add(url)
-            unique_urls.append(url)
-    return unique_urls
+    for raw_value in raw_values:
+        normalized_url, youtube_id = normalize_youtube_input(raw_value)
+        dedupe_key = youtube_id if youtube_id else normalized_url
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized_inputs.append(
+            {
+                "source_input": raw_value,
+                "url": normalized_url,
+                "youtube_id": youtube_id,
+            }
+        )
+
+    return normalized_inputs
 
 
-def process_single_url(url: str, ram_disk_path: str) -> dict[str, object] | None:
-    success, filepath, title = download_to_ram(url=url, ram_disk_path=ram_disk_path)
+def process_single_url(entry: dict[str, str | None], ram_disk_path: str) -> dict[str, object] | None:
+    url = entry["url"] or ""
+    source_input = entry.get("source_input") or url
+    source_youtube_id = entry.get("youtube_id")
+
+    success, filepath, title, downloaded_video_id, resolved_url = download_to_ram(url=url, ram_disk_path=ram_disk_path)
     if not success:
         return None
-    return analyze_and_discard(filepath=filepath, url=url, title=title)
+
+    youtube_id = downloaded_video_id or source_youtube_id or extract_video_id(resolved_url or url)
+    effective_url = resolved_url or (canonical_watch_url(youtube_id) if youtube_id else url)
+
+    song_data = analyze_and_discard(filepath=filepath, url=effective_url, title=title)
+    if song_data is None:
+        return None
+
+    song_data["YouTubeID"] = youtube_id or ""
+    song_data["SourceInput"] = source_input
+    return song_data
 
 
 def run_pipeline(
-    urls: list[str],
+    urls: list[dict[str, str | None]],
     output_csv: str,
     ram_disk_path: str = "/dev/shm/yt_audio",
     workers: int = 8,
@@ -56,10 +81,11 @@ def run_pipeline(
     batch_results: list[dict[str, object]] = []
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_map = {executor.submit(process_single_url, url, ram_disk_path): url for url in urls}
+        future_map = {executor.submit(process_single_url, url_entry, ram_disk_path): url_entry for url_entry in urls}
 
         for idx, future in enumerate(as_completed(future_map), start=1):
-            url = future_map[future]
+            url_entry = future_map[future]
+            source_input = url_entry.get("source_input") or url_entry.get("url") or "unknown"
             try:
                 song_data = future.result()
                 if song_data:
@@ -70,14 +96,14 @@ def run_pipeline(
                         f"BPM: {song_data['BPM']} | Key: {song_data['Key']}"
                     )
                 else:
-                    print(f"[{idx}/{len(urls)}] ⚠️ Skipped URL: {url}")
+                    print(f"[{idx}/{len(urls)}] ⚠️ Skipped URL/Input: {source_input}")
 
                 if len(batch_results) >= flush_every:
                     save_to_dataframe(batch_results, output_csv=output_csv)
                     saved_count += len(batch_results)
                     batch_results.clear()
             except Exception as exc:
-                print(f"[{idx}/{len(urls)}] ❌ Unhandled error for {url} | Error: {exc}")
+                print(f"[{idx}/{len(urls)}] ❌ Unhandled error for {source_input} | Error: {exc}")
 
     if batch_results:
         save_to_dataframe(batch_results, output_csv=output_csv)

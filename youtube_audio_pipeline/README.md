@@ -5,6 +5,7 @@ High-throughput module to download YouTube audio URLs directly into RAM and extr
 - BPM
 - Key
 - Loudness
+- YouTubeID (stable join key for DB updates)
 
 The output is stored in CSV format for downstream processing.
 
@@ -72,9 +73,21 @@ Important:
 - Prefer `python -m ...` execution from the repository root.
 - Avoid `python main.py` from inside [youtube_audio_pipeline](youtube_audio_pipeline), because package imports are not reliably resolvable in that mode.
 
+Input flexibility:
+
+- The URL list can contain full watch URLs, short URLs, embed URLs, iframe embed snippets, or plain 11-char YouTube video IDs.
+- Inputs are normalized to canonical watch URLs and deduplicated by `YouTubeID`.
+
 CSV output default:
 
 - `data/processed/youtube_song_characteristics.csv`
+
+CSV columns include:
+
+- `YouTubeID`
+- `URL` (canonical where available)
+- `SourceInput` (original raw value from your file/CLI)
+- `Title`, `BPM`, `Key`, `Loudness`
 
 ## Common options
 
