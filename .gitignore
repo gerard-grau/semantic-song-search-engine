@@ -51,3 +51,5 @@ site/
 # Local Jupyter/runtime files
 .jupyter/
 
+# AI Code Editors
+.omg

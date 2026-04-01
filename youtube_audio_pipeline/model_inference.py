@@ -1,13 +1,7 @@
 """
-Essentia TensorFlow Model Inference
+Essentia TensorFlow Model Inference (Placeholder Discovery)
 
-Provides thread-safe loading and inference for Essentia pretrained models:
-- Genre classification (Dortmund) - multi-label genre prediction
-- Mood classification (happy/sad/relaxed) - multi-class mood prediction
-- Discogs EfficientNet embeddings - 2048-dim audio embeddings
-
-Models are initialized globally at application startup to avoid per-thread overhead.
-All inference functions are thread-safe (TensorFlow GIL-protected).
+Automatically discovers input/output tensors and satisfies all placeholders.
 """
 
 from __future__ import annotations
@@ -19,282 +13,179 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import tensorflow as tf
+import essentia.standard as es
 
 logger = logging.getLogger(__name__)
 
-# Global model instances (lazy-loaded, thread-protected)
+# Global model instances
 _models_lock = threading.Lock()
-_GENRE_MODEL: Any = None
-_MOOD_MODELS: dict[str, Any] = {}
-_EMBEDDING_MODEL: Any = None
+_PREPROCESSOR: Any = None
+_BACKBONE_GRAPH: Any = None
+_HEAD_GRAPHS: dict[str, Any] = {}
+_METADATA: dict[str, Any] = {}
 _models_initialized = False
 
-# Model paths (relative to this module's directory)
 MODELS_DIR = Path(__file__).parent / "models"
 
-# Model registry (files expected in MODELS_DIR)
 MODEL_REGISTRY = {
-    "genre_dortmund": {
-        "pb_file": "genre_dortmund-discogs-effnet-1.pb",
-        "metadata_file": "genre_dortmund-discogs-effnet-1_metadata.json",
-        "description": "Multi-label genre classification trained on Discogs",
-    },
-    "mood_acoustic": {
-        "pb_file": "mood_acoustic-discogs-effnet-1.pb",
-        "metadata_file": "mood_acoustic-discogs-effnet-1_metadata.json",
-        "description": "Acoustic/organic vs electronic timbre",
-    },
-    "mood_aggressive": {
-        "pb_file": "mood_aggressive-discogs-effnet-1.pb",
-        "metadata_file": "mood_aggressive-discogs-effnet-1_metadata.json",
-        "description": "Aggressive/intense mood classification",
-    },
-    "mood_electronic": {
-        "pb_file": "mood_electronic-discogs-effnet-1.pb",
-        "metadata_file": "mood_electronic-discogs-effnet-1_metadata.json",
-        "description": "Electronic/synthetic sound character",
-    },
-    "mood_happy": {
-        "pb_file": "mood_happy-discogs-effnet-1.pb",
-        "metadata_file": "mood_happy-discogs-effnet-1_metadata.json",
-        "description": "Happy/positive mood classification",
-    },
-    "mood_party": {
-        "pb_file": "mood_party-discogs-effnet-1.pb",
-        "metadata_file": "mood_party-discogs-effnet-1_metadata.json",
-        "description": "Party/energetic mood classification",
-    },
-    "mood_relaxed": {
-        "pb_file": "mood_relaxed-discogs-effnet-1.pb",
-        "metadata_file": "mood_relaxed-discogs-effnet-1_metadata.json",
-        "description": "Relaxed/calm mood classification",
-    },
-    "mood_sad": {
-        "pb_file": "mood_sad-discogs-effnet-1.pb",
-        "metadata_file": "mood_sad-discogs-effnet-1_metadata.json",
-        "description": "Sad/melancholic mood classification",
-    },
-    "discogs_effnet": {
-        "pb_file": "discogs-effnet-1.pb",
-        "metadata_file": "discogs-effnet-1_metadata.json",
-        "description": "2048-dim audio embedding feature extractor",
-    },
+    "backbone": "discogs-effnet-1.pb",
+    "genre": "genre_discogs400-discogs-effnet-1.pb",
+    "mood_acoustic": "mood_acoustic-discogs-effnet-1.pb",
+    "mood_aggressive": "mood_aggressive-discogs-effnet-1.pb",
+    "mood_electronic": "mood_electronic-discogs-effnet-1.pb",
+    "mood_happy": "mood_happy-discogs-effnet-1.pb",
+    "mood_party": "mood_party-discogs-effnet-1.pb",
+    "mood_relaxed": "mood_relaxed-discogs-effnet-1.pb",
+    "mood_sad": "mood_sad-discogs-effnet-1.pb",
 }
 
-
-def _load_pb_model(pb_path: Path) -> Any:
-    """Load a TensorFlow SavedModel from .pb file."""
-    try:
-        import tensorflow as tf
-        model = tf.saved_model.load(str(pb_path))
-        return model
-    except Exception as e:
-        logger.warning(f"Failed to load model {pb_path.name}: {e}")
-        return None
-
-
-def _parse_metadata_json(json_path: Path) -> dict[str, Any]:
-    """Parse Essentia model metadata JSON."""
-    try:
-        with open(json_path, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning(f"Failed to load metadata {json_path.name}: {e}")
-        return {}
-
+def _load_frozen_graph(pb_path: Path) -> tf.GraphDef:
+    with tf.io.gfile.GFile(str(pb_path), "rb") as f:
+        graph_def = tf.compat.v1.GraphDef()
+        graph_def.ParseFromString(f.read())
+    return graph_def
 
 def _ensure_models_loaded() -> None:
-    """Lazy-load all models on first inference call (thread-safe)."""
-    global _GENRE_MODEL, _MOOD_MODELS, _EMBEDDING_MODEL, _models_initialized
+    global _PREPROCESSOR, _BACKBONE_GRAPH, _HEAD_GRAPHS, _METADATA, _models_initialized
 
-    if _models_initialized:
-        return
+    if _models_initialized: return
 
     with _models_lock:
-        if _models_initialized:  # Double-check locking
-            return
+        if _models_initialized: return
 
-        logger.info(f"Loading Essentia models from {MODELS_DIR}")
-
-        # Load genre model
-        genre_pb = MODELS_DIR / MODEL_REGISTRY["genre_dortmund"]["pb_file"]
-        if genre_pb.exists():
-            _GENRE_MODEL = _load_pb_model(genre_pb)
-            if _GENRE_MODEL:
-                logger.info("✓ Genre model loaded")
-        else:
-            logger.warning(f"Genre model not found at {genre_pb}")
-
-        # Load mood models (7 total)
-        for mood in ["acoustic", "aggressive", "electronic", "happy", "party", "relaxed", "sad"]:
-            key = f"mood_{mood}"
-            pb_file = MODELS_DIR / MODEL_REGISTRY[key]["pb_file"]
-            if pb_file.exists():
-                model = _load_pb_model(pb_file)
-                if model:
-                    _MOOD_MODELS[mood] = model
-                    logger.info(f"✓ Mood ({mood}) model loaded")
-            else:
-                logger.warning(f"Mood ({mood}) model not found at {pb_file}")
-
-        # Load embedding model
-        embed_pb = MODELS_DIR / MODEL_REGISTRY["discogs_effnet"]["pb_file"]
-        if embed_pb.exists():
-            _EMBEDDING_MODEL = _load_pb_model(embed_pb)
-            if _EMBEDDING_MODEL:
-                logger.info("✓ Embedding model loaded")
-        else:
-            logger.warning(f"Embedding model not found at {embed_pb}")
+        logger.info(f"Loading models from {MODELS_DIR}")
+        _PREPROCESSOR = es.TensorflowInputMusiCNN()
+        
+        for key, filename in MODEL_REGISTRY.items():
+            path = MODELS_DIR / filename
+            if path.exists():
+                graph_def = _load_frozen_graph(path)
+                if key == "backbone":
+                    _BACKBONE_GRAPH = graph_def
+                else:
+                    _HEAD_GRAPHS[key] = graph_def
+                
+                meta_path = path.with_name(filename.replace(".pb", "_metadata.json"))
+                if meta_path.exists():
+                    with open(meta_path, "r") as f:
+                        _METADATA[key] = json.load(f)
+                logger.info(f"✓ {key} loaded")
 
         _models_initialized = True
 
-
 def initialize_models_globally() -> None:
-    """
-    Initialize all models at application startup (called once by main.py).
-    This is separate from _ensure_models_loaded() to allow explicit
-    early initialization with user feedback.
-    """
-    logger.info("Pre-loading Essentia models...")
     _ensure_models_loaded()
-    if _GENRE_MODEL and len(_MOOD_MODELS) == 3 and _EMBEDDING_MODEL:
-        logger.info("✓ All models loaded successfully")
-    else:
-        logger.warning("⚠ Some models failed to load; pipeline will skip those features")
 
+def _find_tensors(graph: tf.Graph):
+    """
+    Finds potential input and output tensors.
+    """
+    placeholders = [t.name for op in graph.get_operations() if op.type == "Placeholder" for t in op.outputs]
+    
+    # Primary input is usually the one with mel or Placeholder in name
+    primary_input = ""
+    for p in placeholders:
+        if "mel" in p.lower() or "input" in p.lower() or "placeholder" in p.lower():
+            primary_input = p
+            break
+    if not primary_input and placeholders:
+        primary_input = placeholders[0]
+        
+    # Primary output
+    outputs = []
+    for op in graph.get_operations():
+        for t in op.outputs:
+            if t.dtype in [tf.float32, tf.float64]:
+                if any(x in t.name for x in ["PartitionedCall", "Softmax", "Sigmoid"]):
+                    outputs.append(t.name)
+    
+    primary_output = ""
+    if outputs:
+        # Prefer :1 for PartitionedCall
+        pcalls_1 = [o for o in outputs if "PartitionedCall" in o and o.endswith(":1")]
+        primary_output = pcalls_1[-1] if pcalls_1 else outputs[-1]
+    
+    return primary_input, primary_output, placeholders
+
+def _run_with_discovery(graph_def: tf.GraphDef, input_value: np.ndarray) -> np.ndarray:
+    with tf.Graph().as_default() as g:
+        tf.import_graph_def(graph_def, name="model")
+        inp_name, out_name, all_placeholders = _find_tensors(g)
+        
+        with tf.compat.v1.Session(graph=g) as sess:
+            feed_dict = {inp_name: input_value}
+            # Satisfy other placeholders
+            for p in all_placeholders:
+                if p != inp_name:
+                    tensor = g.get_tensor_by_name(p)
+                    if tensor.dtype == tf.string: feed_dict[p] = b""
+                    elif tensor.dtype in [tf.float32, tf.float64]: feed_dict[p] = 0.0
+                    else: feed_dict[p] = 0
+            
+            return sess.run(out_name, feed_dict=feed_dict)
+
+def run_full_inference(audio: np.ndarray) -> dict[str, Any]:
+    _ensure_models_loaded()
+    results = {"genre": {}, "moods": {}, "embedding": None}
+    if _BACKBONE_GRAPH is None: return results
+
+    try:
+        resampler = es.Resample(inputSampleRate=44100, outputSampleRate=16000)
+        audio_16k = resampler(audio)
+
+        mel_frames = []
+        for frame in es.FrameGenerator(audio_16k, frameSize=512, hopSize=256, startFromZero=True):
+            mel_frames.append(_PREPROCESSOR(frame).flatten())
+        
+        if not mel_frames: return results
+        mel_data = np.array(mel_frames)
+        
+        patch_size, hop_size = 128, 64
+        patches = []
+        for i in range(0, len(mel_data) - patch_size + 1, hop_size):
+            patches.append(mel_data[i:i+patch_size])
+        
+        if not patches:
+            pad_len = patch_size - len(mel_data)
+            patches.append(np.pad(mel_data, ((0, pad_len), (0, 0)), mode='constant'))
+
+        # Fixed batch size processing for backbone
+        batch_size = 64
+        all_embeddings = []
+        for i in range(0, len(patches), batch_size):
+            batch = patches[i:i+batch_size]
+            actual_len = len(batch)
+            if actual_len < batch_size:
+                for _ in range(batch_size - actual_len): batch.append(batch[-1])
+            
+            embeddings = _run_with_discovery(_BACKBONE_GRAPH, np.array(batch))
+            all_embeddings.append(embeddings[:actual_len])
+                
+        track_embedding = np.mean(np.concatenate(all_embeddings, axis=0), axis=0, keepdims=True)
+        results["embedding"] = track_embedding.flatten()
+
+        for key, graph_def in _HEAD_GRAPHS.items():
+            logits = _run_with_discovery(graph_def, track_embedding)
+            probs = logits.flatten()
+            
+            if key == "genre":
+                labels = _METADATA[key].get("classes", [])
+                results["genre"] = {labels[i]: float(probs[i]) for i in range(min(len(labels), len(probs)))}
+            else:
+                mood_name = key.replace("mood_", "")
+                results["moods"][mood_name] = float(probs[0])
+
+    except Exception as e:
+        logger.error(f"Inference failed: {e}")
+        
+    return results
 
 def run_genre_inference(audio: np.ndarray, sr: int = 44100) -> dict[str, float]:
-    """
-    Run genre classification inference.
-
-    Args:
-        audio: Mono audio waveform (numpy array, float32)
-        sr: Sample rate (default 44100)
-
-    Returns:
-        Dict mapping genre labels to confidence scores [0-1].
-        Empty dict if inference fails or model unavailable.
-    """
-    _ensure_models_loaded()
-
-    if _GENRE_MODEL is None:
-        logger.debug("Genre model not available, skipping genre inference")
-        return {}
-
-    try:
-        # Prepare audio for inference (model expects specific shape/format)
-        # Essentia TensorFlow models typically expect [1, num_samples] or [1, time_steps, features]
-        audio_input = np.expand_dims(audio, axis=0).astype(np.float32)
-
-        # Run inference through the model's signature (saved_model)
-        # Typically: model.signatures['serving_default'](tensor) → dict with output keys
-        infer = _GENRE_MODEL.signatures["serving_default"]
-        output = infer(tf.constant(audio_input))
-
-        # Extract probabilities (key depends on model; typically 'predictions' or 'output')
-        # For Essentia models: output keys are model-specific; need metadata to map
-        predictions = {}
-        for key, value in output.items():
-            if "predictions" in key.lower() or "scores" in key.lower():
-                probs = value.numpy().flatten()
-                # Map to class labels (load from metadata)
-                metadata = _parse_metadata_json(
-                    MODELS_DIR / MODEL_REGISTRY["genre_dortmund"]["metadata_file"]
-                )
-                labels = metadata.get("classes", [f"Genre_{i}" for i in range(len(probs))])
-                predictions = {label: float(prob) for label, prob in zip(labels, probs)}
-                break
-
-        return predictions
-
-    except Exception as e:
-        logger.debug(f"Genre inference failed: {e}")
-        return {}
-
+    return run_full_inference(audio)["genre"]
 
 def run_mood_inference(audio: np.ndarray, sr: int = 44100) -> dict[str, float]:
-    """
-    Run multi-class mood inference (happy, sad, relaxed).
-
-    Args:
-        audio: Mono audio waveform (numpy array, float32)
-        sr: Sample rate (default 44100)
-
-    Returns:
-        Dict with keys 'happy', 'sad', 'relaxed' mapped to confidence scores [0-1].
-        Empty dict if inference fails or models unavailable.
-    """
-    _ensure_models_loaded()
-
-    if len(_MOOD_MODELS) == 0:
-        logger.debug("Mood models not available, skipping mood inference")
-        return {}
-
-    mood_scores = {}
-
-    for mood, model in _MOOD_MODELS.items():
-        try:
-            if model is None:
-                continue
-
-            audio_input = np.expand_dims(audio, axis=0).astype(np.float32)
-            import tensorflow as tf
-
-            infer = model.signatures["serving_default"]
-            output = infer(tf.constant(audio_input))
-
-            # Extract confidence (typically binary classifier output)
-            for key, value in output.items():
-                if "predictions" in key.lower() or "scores" in key.lower():
-                    prob = float(value.numpy().flatten()[0])
-                    mood_scores[mood] = prob
-                    break
-
-        except Exception as e:
-            logger.debug(f"Mood ({mood}) inference failed: {e}")
-
-    return mood_scores
-
+    return run_full_inference(audio)["moods"]
 
 def run_embedding_inference(audio: np.ndarray, sr: int = 44100) -> np.ndarray | None:
-    """
-    Extract 2048-dim audio embedding using Discogs EfficientNet model.
-
-    Args:
-        audio: Mono audio waveform (numpy array, float32)
-        sr: Sample rate (default 44100)
-
-    Returns:
-        2048-dimensional numpy array (float32) or None if inference fails.
-    """
-    _ensure_models_loaded()
-
-    if _EMBEDDING_MODEL is None:
-        logger.debug("Embedding model not available, skipping embedding inference")
-        return None
-
-    try:
-        audio_input = np.expand_dims(audio, axis=0).astype(np.float32)
-        import tensorflow as tf
-
-        infer = _EMBEDDING_MODEL.signatures["serving_default"]
-        output = infer(tf.constant(audio_input))
-
-        # Extract embedding (typically 2048-dim vector)
-        for key, value in output.items():
-            if "embedding" in key.lower() or "features" in key.lower():
-                embedding = value.numpy().flatten()
-                return embedding
-
-        # Fallback: if no explicit embedding key, grab first output
-        first_output = next(iter(output.values()))
-        embedding = first_output.numpy().flatten()
-        return embedding
-
-    except Exception as e:
-        logger.debug(f"Embedding inference failed: {e}")
-        return None
-
-
-# Lazy import TensorFlow at module level to avoid errors when models aren't loaded
-import tensorflow as tf
+    return run_full_inference(audio)["embedding"]
