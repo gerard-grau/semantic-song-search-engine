@@ -23,6 +23,13 @@ FLATTENED_MOODS = [
     "summer", "upbeat", "calm"
 ]
 
+# High-level parent genres from Discogs taxonomy
+FLATTENED_GENRES = [
+    "Blues", "Brass & Military", "Children's", "Classical", "Electronic", 
+    "Folk, World, & Country", "Funk / Soul", "Hip Hop", "Jazz", "Latin", 
+    "Non-Music", "Pop", "Reggae", "Rock", "Stage & Screen"
+]
+
 def analyze_and_discard(
     filepath: Path,
     metadata: dict,
@@ -105,13 +112,41 @@ def analyze_and_discard(
 
         # 2. Extract ML Model Features
         mood_theme_flat = {f"Mood_{m}": 0.0 for m in FLATTENED_MOODS}
+        genre_parent_flat = {f"Genre_{g.replace(' ', '').replace(',', '').replace('&', 'And').replace('/', 'Or')}": 0.0 for g in FLATTENED_GENRES}
         
         if not skip_models:
             full_res = model_inference.run_full_inference(audio)
             
+            # Parse Genre (with aggregation and simplification)
             genre_probs = full_res["genre"]
-            genre_top_label, genre_top_confidence = max(genre_probs.items(), key=lambda x: x[1]) if genre_probs else ("Unknown", 0.0)
+            if genre_probs:
+                # Top specific label
+                genre_top_label, genre_top_confidence = max(genre_probs.items(), key=lambda x: x[1])
+                
+                # Aggregate by Parent
+                parent_scores = {}
+                for label, score in genre_probs.items():
+                    parent = label.split("---")[0]
+                    parent_scores[parent] = parent_scores.get(parent, 0.0) + score
+                
+                # Top Parent
+                genre_top_parent = max(parent_scores.items(), key=lambda x: x[1])[0]
+                
+                # Flatten Parent Genres
+                for g in FLATTENED_GENRES:
+                    col_name = f"Genre_{g.replace(' ', '').replace(',', '').replace('&', 'And').replace('/', 'Or')}"
+                    if g in parent_scores:
+                        genre_parent_flat[col_name] = float(parent_scores[g])
+                
+                # Truncate specific JSON to top 5
+                top_5_specific = dict(sorted(genre_probs.items(), key=lambda x: x[1], reverse=True)[:5])
+                genre_probs_json = json.dumps(top_5_specific)
+            else:
+                genre_top_label, genre_top_confidence = "Unknown", 0.0
+                genre_top_parent = "Unknown"
+                genre_probs_json = "{}"
             
+            # Parse Mood & Theme (Multi-task)
             mood_theme_probs = full_res["mood_theme"]
             top_moods = sorted(mood_theme_probs.items(), key=lambda x: x[1], reverse=True)[:5]
             top_moods_str = ", ".join([f"{m} ({s:.2f})" for m, s in top_moods])
@@ -131,13 +166,16 @@ def analyze_and_discard(
             gender_res = full_res["voice_gender"]
             gender_label = max(gender_res.items(), key=lambda x: x[1])[0] if gender_res else "unknown"
             
+            # Parse Timbre
             timbre_res = full_res["timbre"]
             timbre_label = max(timbre_res.items(), key=lambda x: x[1])[0] if timbre_res else "unknown"
             
+            # Embedding
             embedding = full_res["embedding"]
             embedding_json = json.dumps(embedding.tolist()) if embedding is not None else "[]"
         else:
-            genre_top_label, genre_top_confidence, genre_probs = "Unknown", 0.0, {}
+            genre_top_label, genre_top_confidence, genre_probs_json = "Unknown", 0.0, "{}"
+            genre_top_parent = "Unknown"
             mood_theme_probs = {}
             top_moods_str, top_inst_str = "", ""
             voice_inst_label, gender_label, timbre_label = "unknown", "unknown", "unknown"
@@ -174,8 +212,9 @@ def analyze_and_discard(
             "MfccMeanJson": mfcc_json,
             "HpcpMeanJson": hpcp_json,
             "GenreTopLabel": genre_top_label,
+            "GenreTopParent": genre_top_parent,
             "GenreTopConfidence": genre_top_confidence,
-            "GenreProbsJson": json.dumps(genre_probs),
+            "GenreProbsJson": genre_probs_json,
             "MoodThemeSummary": top_moods_str,
             "MoodThemeProbsJson": json.dumps(mood_theme_probs),
             "InstrumentationSummary": top_inst_str,
@@ -185,8 +224,9 @@ def analyze_and_discard(
             "DiscogsEmbeddingJson": embedding_json,
         }
         
-        # Add flattened mood columns
+        # Add flattened columns
         result.update(mood_theme_flat)
+        result.update(genre_parent_flat)
 
         return result
 
