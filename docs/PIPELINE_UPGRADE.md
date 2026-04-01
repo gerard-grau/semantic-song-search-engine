@@ -1,6 +1,6 @@
 # YouTube Audio Pipeline Upgrade & Validation Summary
 
-This document summarizes the enhancements made to the YouTube audio pipeline to support advanced ML-based feature extraction.
+This document summarizes the enhancements made to the YouTube audio pipeline to support advanced ML-based feature extraction and database-optimized data structures.
 
 ## 1. Model Integration (Enriched Version)
 The pipeline now utilizes an optimized suite of Essentia pretrained models, hosted locally in `youtube_audio_pipeline/models/`:
@@ -15,25 +15,27 @@ The pipeline now utilizes an optimized suite of Essentia pretrained models, host
 - **Timbre**: `timbre-discogs-effnet-1.pb` (Bright/Dark classification).
 
 ## 2. Technical Enhancements
-To support these models, several critical updates were made:
+To support these models and prepare for database ingestion (e.g., MariaDB), the following updates were made:
 
 - **Multi-task Inference**: Transitioned from individual binary mood heads to a single multi-task model for improved efficiency.
-- **WAV Conversion**: Updated `youtube_audio_pipeline/downloader.py` to automatically convert YouTube audio to WAV format, ensuring compatibility with Essentia's `MonoLoader`.
-- **Robust Feature Extraction**: Refactored `analyzer.py` to handle complex-to-real vector conversions and provide safe extraction for spectral features.
-- **Dynamic Tensor Discovery**: Implemented automatic input/output tensor discovery in `model_inference.py` to support diverse frozen graph exports.
-- **Fixed-Batch Processing**: Maintained 64-patch batching for efficient backbone execution.
+- **WAV Conversion**: Updated `youtube_audio_pipeline/downloader.py` to automatically convert YouTube audio to WAV format, ensuring 100% compatibility with Essentia's `MonoLoader`.
+- **Enriched Metadata**: Captured rich YouTube metrics including `ViewCount`, `LikeCount`, `Uploader`, and `UploadDate` to facilitate popularity-based searching.
+- **Flattened Data Structure**: Selected the 12 most representative mood/theme tags and flattened them into individual **FLOAT** columns (e.g., `Mood_happy`, `Mood_energetic`). This enables direct SQL filtering without parsing JSON blobs.
+- **Robust Feature Extraction**: Refactored `analyzer.py` to safely handle complex-to-real vector conversions and provide robust extraction for spectral features (BPM, Key, Loudness, etc.).
+- **Fixed-Batch Processing**: Implemented a patching and batching system to satisfy the fixed batch size (64) requirement of the Discogs-EffNet backbone.
 
 ## 3. Validation Results
-The pipeline was validated against multiple YouTube URLs, confirming successful extraction of enriched musical characteristics.
+The pipeline was validated against multiple YouTube URLs, confirming successful extraction of enriched characteristics in a structured format.
 
-### Sample Output (Verified):
-| Track | Genre | Top Moods/Themes | Voice | Gender | Timbre |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| Never Gonna Give You Up | Electronic---Synth-pop | energetic, melodic, summer | voice | female* | dark |
-| GANGNAM STYLE | Electronic---Electro | energetic, party, happy | voice | male | dark |
+### Sample Output Structure (Verified):
+| Track | ViewCount | Genre | Mood_happy | Mood_energetic | Voice | Timbre |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Never Gonna Give You Up | 1.7B+ | Electronic---Synth-pop | 0.052 | 0.146 | voice | dark |
+| GANGNAM STYLE | 5.1B+ | Electronic---Electro | 0.102 | 0.334 | voice | dark |
 
-*\*Note: Model predictions are probabilistic and reflect the classifier's confidence.*
+*\*Note: Scores reflect probabilistic confidence from 0.0 to 1.0.*
 
 ## 4. Maintenance
 - **Persistence**: Models and metadata are stored in `youtube_audio_pipeline/models/`.
-- **Validation Data**: The enriched test run data is available in `data/processed/enriched_validation.csv`.
+- **Validation Data**: The final structured test data is available in `data/processed/final_structure_test.csv`.
+- **Database Mapping**: The CSV headers are designed to map directly to MariaDB `FLOAT`, `INT`, and `TEXT` types.

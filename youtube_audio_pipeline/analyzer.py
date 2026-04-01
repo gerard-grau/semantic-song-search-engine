@@ -16,17 +16,25 @@ from youtube_audio_pipeline import model_inference
 
 logger = logging.getLogger(__name__)
 
+# Core moods/themes to flatten into columns for easy querying
+FLATTENED_MOODS = [
+    "happy", "sad", "dark", "energetic", "relaxing", 
+    "melodic", "emotional", "party", "romantic", 
+    "summer", "upbeat", "calm"
+]
 
 def analyze_and_discard(
     filepath: Path,
-    url: str,
-    title: str = "Unknown",
+    metadata: dict,
     skip_models: bool = False,
 ) -> dict | None:
     """
     Extracts audio characteristics and ML features from a local audio file,
     and returns them as a dictionary. The caller is responsible for cleanup.
     """
+    url = metadata.get("url", "Unknown URL")
+    title = metadata.get("title", "Unknown Title")
+    
     try:
         # 1. Extract audio characteristics using Essentia
         sample_rate = 44100
@@ -60,7 +68,6 @@ def analyze_and_discard(
         # Spectral features
         zcr = es.ZeroCrossingRate()(audio)
         
-        # Move potentially complex spectral features to safe extraction
         mfcc_json = "[]"
         hpcp_json = "[]"
         spec_centroid = 0.0
@@ -75,16 +82,15 @@ def analyze_and_discard(
             frame = audio[:1024]
             if len(frame) < 1024: frame = np.pad(frame, (0, 1024 - len(frame)))
             
-            # Use raw FFT for pitch
             pitch_extractor = es.PitchYinFFT()
             pitches = []
             for f in es.FrameGenerator(audio, frameSize=2048, hopSize=1024):
-                p, c = pitch_extractor(fft(w(f)))
+                p_spec = fft(w(f))
+                p, c = pitch_extractor(p_spec)
                 if c > 0.5: pitches.append(p)
             pitch_mean = float(np.mean(pitches)) if pitches else 0.0
             pitch_std = float(np.std(pitches)) if pitches else 0.0
 
-            # Use magnitude for others
             mag = np.abs(fft(w(frame))).astype(np.float32)
             spec_centroid = float(es.Centroid()(mag))
             spec_rolloff = float(es.RollOff()(mag))
@@ -98,6 +104,8 @@ def analyze_and_discard(
             logger.debug(f"Spectral feature extraction failed: {e}")
 
         # 2. Extract ML Model Features
+        mood_theme_flat = {f"Mood_{m}": 0.0 for m in FLATTENED_MOODS}
+        
         if not skip_models:
             full_res = model_inference.run_full_inference(audio)
             
@@ -107,6 +115,11 @@ def analyze_and_discard(
             mood_theme_probs = full_res["mood_theme"]
             top_moods = sorted(mood_theme_probs.items(), key=lambda x: x[1], reverse=True)[:5]
             top_moods_str = ", ".join([f"{m} ({s:.2f})" for m, s in top_moods])
+            
+            # Flatten selected moods
+            for m in FLATTENED_MOODS:
+                if m in mood_theme_probs:
+                    mood_theme_flat[f"Mood_{m}"] = float(mood_theme_probs[m])
             
             inst_probs = full_res["instrumentation"]
             top_inst = sorted(inst_probs.items(), key=lambda x: x[1], reverse=True)[:3]
@@ -134,6 +147,12 @@ def analyze_and_discard(
         result = {
             "URL": url,
             "Title": title,
+            "YouTubeID": metadata.get("id", "Unknown"),
+            "Uploader": metadata.get("uploader", "Unknown"),
+            "Channel": metadata.get("channel", "Unknown"),
+            "UploadDate": metadata.get("upload_date", "Unknown"),
+            "ViewCount": int(metadata.get("view_count", 0)),
+            "LikeCount": int(metadata.get("like_count", 0)),
             "BPM": float(bpm),
             "Key": f"{key} {scale}",
             "KeyStrength": float(strength),
@@ -153,7 +172,6 @@ def analyze_and_discard(
             "PitchStdHz": pitch_std,
             "ZeroCrossingRate": float(zcr),
             "MfccMeanJson": mfcc_json,
-            "MfccStdJson": "[]",
             "HpcpMeanJson": hpcp_json,
             "GenreTopLabel": genre_top_label,
             "GenreTopConfidence": genre_top_confidence,
@@ -166,6 +184,9 @@ def analyze_and_discard(
             "Timbre": timbre_label,
             "DiscogsEmbeddingJson": embedding_json,
         }
+        
+        # Add flattened mood columns
+        result.update(mood_theme_flat)
 
         return result
 

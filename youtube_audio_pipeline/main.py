@@ -4,64 +4,69 @@ import argparse
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 from youtube_audio_pipeline.analyzer import analyze_and_discard, save_to_dataframe
 from youtube_audio_pipeline.downloader import download_to_ram
-from youtube_audio_pipeline.youtube_utils import canonical_watch_url, extract_video_id, normalize_youtube_input
+from youtube_audio_pipeline.youtube_utils import (
+    canonical_watch_url,
+    extract_video_id,
+    normalize_youtube_input,
+)
 from youtube_audio_pipeline import model_inference
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
-def load_urls(urls_file: str | None, urls_cli: list[str] | None) -> list[dict[str, str | None]]:
-    raw_values: list[str] = []
+def load_urls(urls_file: str) -> list[dict[str, str | None]]:
+    urls = []
+    urls_path = Path(urls_file)
+    if not urls_path.exists():
+        return []
 
-    if urls_file:
-        with open(urls_file, "r", encoding="utf-8") as handle:
-            for line in handle:
-                candidate = line.strip()
-                if candidate and not candidate.startswith("#"):
-                    raw_values.append(candidate)
-
-    if urls_cli:
-        raw_values.extend(urls_cli)
-
-    normalized_inputs: list[dict[str, str | None]] = []
-    seen: set[str] = set()
-    for raw_value in raw_values:
-        normalized_url, youtube_id = normalize_youtube_input(raw_value)
-        dedupe_key = youtube_id if youtube_id else normalized_url
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
-        normalized_inputs.append(
-            {
-                "source_input": raw_value,
-                "url": normalized_url,
-                "youtube_id": youtube_id,
-            }
-        )
-
-    return normalized_inputs
+    with open(urls_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            url, video_id = normalize_youtube_input(line)
+            urls.append({"url": url, "youtube_id": video_id, "source_input": line})
+    return urls
 
 
-def process_single_url(entry: dict[str, str | None], ram_disk_path: str) -> dict[str, object] | None:
-    url = entry["url"] or ""
-    source_input = entry.get("source_input") or url
-    source_youtube_id = entry.get("youtube_id")
-
-    success, filepath, title, downloaded_video_id, resolved_url = download_to_ram(url=url, ram_disk_path=ram_disk_path)
-    if not success:
+def process_single_url(
+    entry: dict[str, str | None], ram_disk_path: str, skip_models: bool = False
+) -> dict | None:
+    url = entry.get("url")
+    if not url:
         return None
 
-    youtube_id = downloaded_video_id or source_youtube_id or extract_video_id(resolved_url or url)
-    effective_url = resolved_url or (canonical_watch_url(youtube_id) if youtube_id else url)
+    source_input = entry.get("source_input") or url
+    
+    # download_to_ram now returns (success, filepath, metadata_dict)
+    success, filepath, metadata = download_to_ram(url=url, ram_disk_path=ram_disk_path)
+    if not success or metadata is None:
+        return None
 
-    song_data = analyze_and_discard(filepath=filepath, url=effective_url, title=title)
+    # Use metadata from downloader
+    filepath_obj = Path(filepath)
+    song_data = analyze_and_discard(
+        filepath=filepath_obj, 
+        metadata=metadata,
+        skip_models=skip_models
+    )
+    
+    # Cleanup after analysis
+    if filepath_obj.exists():
+        filepath_obj.unlink()
+
     if song_data is None:
         return None
 
-    song_data["YouTubeID"] = youtube_id or ""
     song_data["SourceInput"] = source_input
     return song_data
 
@@ -72,6 +77,7 @@ def run_pipeline(
     ram_disk_path: str = "/dev/shm/yt_audio",
     workers: int = 8,
     flush_every: int = 200,
+    skip_models: bool = False,
 ) -> tuple[int, int]:
     if not urls:
         print("No URLs provided.")
@@ -85,7 +91,10 @@ def run_pipeline(
     batch_results: list[dict[str, object]] = []
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_map = {executor.submit(process_single_url, url_entry, ram_disk_path): url_entry for url_entry in urls}
+        future_map = {
+            executor.submit(process_single_url, url_entry, ram_disk_path, skip_models): url_entry 
+            for url_entry in urls
+        }
 
         for idx, future in enumerate(as_completed(future_map), start=1):
             url_entry = future_map[future]
@@ -97,7 +106,7 @@ def run_pipeline(
                     batch_results.append(song_data)
                     print(
                         f"[{idx}/{len(urls)}] ✅ Processed: {song_data['Title']} | "
-                        f"BPM: {song_data['BPM']} | Key: {song_data['Key']}"
+                        f"BPM: {song_data.get('BPM', 0.0):.1f} | Key: {song_data.get('Key', 'N/A')}"
                     )
                 else:
                     print(f"[{idx}/{len(urls)}] ⚠️ Skipped URL/Input: {source_input}")
@@ -108,6 +117,7 @@ def run_pipeline(
                     batch_results.clear()
             except Exception as exc:
                 print(f"[{idx}/{len(urls)}] ❌ Unhandled error for {source_input} | Error: {exc}")
+                logger.exception("Unexpected error in pipeline:")
 
     if batch_results:
         save_to_dataframe(batch_results, output_csv=output_csv)
@@ -121,8 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Download YouTube audio to RAM disk and extract musical features "
-            "(BPM, Key, Loudness, Duration, RMS, Danceability, Valence, "
-            "SpectralCentroid, ZeroCrossingRate) to CSV."
+            "with enriched ML models."
         )
     )
     parser.add_argument(
@@ -151,19 +160,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workers",
         type=int,
-        default=min(22, max(1, os.cpu_count() or 1)),
-        help="Parallel workers for download + analysis.",
+        default=8,
+        help="Number of concurrent workers.",
     )
     parser.add_argument(
         "--flush-every",
         type=int,
-        default=200,
-        help="Write to CSV every N processed songs.",
+        default=10,
+        help="Flush results to CSV every N songs.",
     )
     parser.add_argument(
         "--skip-models",
         action="store_true",
-        help="Skip model inference (genre, mood, embeddings). Useful for testing.",
+        help="Skip ML model inference.",
     )
     return parser
 
@@ -172,29 +181,31 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    # Configure logging
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    urls = []
+    if args.url:
+        for u in args.url:
+            norm_url, vid_id = normalize_youtube_input(u)
+            urls.append({"url": norm_url, "youtube_id": vid_id, "source_input": u})
 
-    urls = load_urls(args.urls_file, args.url)
+    if args.urls_file and os.path.exists(args.urls_file):
+        urls.extend(load_urls(args.urls_file))
+
     if not urls:
-        print("No URLs found. Provide --urls-file and/or --url.")
+        print("Error: No URLs found. Provide --url or a valid --urls-file.")
         return
 
-    # Pre-load models if not skipped
     if not args.skip_models:
-        print("Initializing Essentia models (genre, mood, embeddings)...")
+        print("Initializing Essentia models (genre, mood, embeddings, etc.)...")
         model_inference.initialize_models_globally()
         print("✓ Models ready")
-    else:
-        print("⚠️ Model inference skipped (--skip-models flag set)")
 
-    print(f"Starting pipeline for {len(urls)} URL(s) with {args.workers} worker(s)...")
     processed_count, saved_count = run_pipeline(
         urls=urls,
         output_csv=args.output_csv,
         ram_disk_path=args.ram_disk_path,
         workers=args.workers,
         flush_every=args.flush_every,
+        skip_models=args.skip_models,
     )
     print(f"Finished. Successfully processed: {processed_count}. Rows saved: {saved_count}.")
 
