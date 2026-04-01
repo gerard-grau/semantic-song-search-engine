@@ -34,12 +34,18 @@ def download_to_ram(
         "noplaylist": True,
         "external_downloader": "aria2c",
         "external_downloader_args": ["-x", "16", "-s", "16", "-k", "1M"],
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "wav",
+            "preferredquality": "192",
+        }],
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            filepath = ydl.prepare_filename(info)
+            # After post-processing, the extension changes to .wav
+            filepath = ydl.prepare_filename(info).rsplit('.', 1)[0] + ".wav"
             title = info.get("title", "Unknown Title")
             video_id = info.get("id")
             resolved_url = info.get("webpage_url")
@@ -53,11 +59,16 @@ def download_to_ram(
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "wav",
+                "preferredquality": "192",
+            }],
         }
         try:
             with yt_dlp.YoutubeDL(fallback_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-                filepath = ydl.prepare_filename(info)
+                filepath = ydl.prepare_filename(info).rsplit('.', 1)[0] + ".wav"
                 title = info.get("title", "Unknown Title")
                 video_id = info.get("id")
                 resolved_url = info.get("webpage_url")

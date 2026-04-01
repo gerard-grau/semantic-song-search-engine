@@ -1,7 +1,11 @@
 """
-Essentia TensorFlow Model Inference (Placeholder Discovery)
+Essentia TensorFlow Model Inference (Enriched Version)
 
-Automatically discovers input/output tensors and satisfies all placeholders.
+Uses a multi-task approach for Mood/Theme and adds enrichment heads for:
+- Instrumentation (40 classes)
+- Voice/Instrumental (binary)
+- Voice Gender (male/female)
+- Timbre (bright/dark)
 """
 
 from __future__ import annotations
@@ -28,16 +32,15 @@ _models_initialized = False
 
 MODELS_DIR = Path(__file__).parent / "models"
 
+# Updated Registry with multi-task and enrichment models
 MODEL_REGISTRY = {
     "backbone": "discogs-effnet-1.pb",
     "genre": "genre_discogs400-discogs-effnet-1.pb",
-    "mood_acoustic": "mood_acoustic-discogs-effnet-1.pb",
-    "mood_aggressive": "mood_aggressive-discogs-effnet-1.pb",
-    "mood_electronic": "mood_electronic-discogs-effnet-1.pb",
-    "mood_happy": "mood_happy-discogs-effnet-1.pb",
-    "mood_party": "mood_party-discogs-effnet-1.pb",
-    "mood_relaxed": "mood_relaxed-discogs-effnet-1.pb",
-    "mood_sad": "mood_sad-discogs-effnet-1.pb",
+    "mood_theme": "mtg_jamendo_moodtheme-discogs-effnet-1.pb",
+    "instrumentation": "mtg_jamendo_instrument-discogs-effnet-1.pb",
+    "voice_instrumental": "voice_instrumental-discogs-effnet-1.pb",
+    "voice_gender": "voice_gender-discogs-effnet-1.pb",
+    "timbre": "timbre-discogs-effnet-1.pb",
 }
 
 def _load_frozen_graph(pb_path: Path) -> tf.GraphDef:
@@ -54,7 +57,7 @@ def _ensure_models_loaded() -> None:
     with _models_lock:
         if _models_initialized: return
 
-        logger.info(f"Loading models from {MODELS_DIR}")
+        logger.info(f"Loading enriched models from {MODELS_DIR}")
         _PREPROCESSOR = es.TensorflowInputMusiCNN()
         
         for key, filename in MODEL_REGISTRY.items():
@@ -78,12 +81,7 @@ def initialize_models_globally() -> None:
     _ensure_models_loaded()
 
 def _find_tensors(graph: tf.Graph):
-    """
-    Finds potential input and output tensors.
-    """
     placeholders = [t.name for op in graph.get_operations() if op.type == "Placeholder" for t in op.outputs]
-    
-    # Primary input is usually the one with mel or Placeholder in name
     primary_input = ""
     for p in placeholders:
         if "mel" in p.lower() or "input" in p.lower() or "placeholder" in p.lower():
@@ -92,7 +90,6 @@ def _find_tensors(graph: tf.Graph):
     if not primary_input and placeholders:
         primary_input = placeholders[0]
         
-    # Primary output
     outputs = []
     for op in graph.get_operations():
         for t in op.outputs:
@@ -102,7 +99,6 @@ def _find_tensors(graph: tf.Graph):
     
     primary_output = ""
     if outputs:
-        # Prefer :1 for PartitionedCall
         pcalls_1 = [o for o in outputs if "PartitionedCall" in o and o.endswith(":1")]
         primary_output = pcalls_1[-1] if pcalls_1 else outputs[-1]
     
@@ -115,7 +111,6 @@ def _run_with_discovery(graph_def: tf.GraphDef, input_value: np.ndarray) -> np.n
         
         with tf.compat.v1.Session(graph=g) as sess:
             feed_dict = {inp_name: input_value}
-            # Satisfy other placeholders
             for p in all_placeholders:
                 if p != inp_name:
                     tensor = g.get_tensor_by_name(p)
@@ -127,7 +122,15 @@ def _run_with_discovery(graph_def: tf.GraphDef, input_value: np.ndarray) -> np.n
 
 def run_full_inference(audio: np.ndarray) -> dict[str, Any]:
     _ensure_models_loaded()
-    results = {"genre": {}, "moods": {}, "embedding": None}
+    results = {
+        "genre": {}, 
+        "mood_theme": {}, 
+        "instrumentation": {},
+        "voice_instrumental": {},
+        "voice_gender": {},
+        "timbre": {},
+        "embedding": None
+    }
     if _BACKBONE_GRAPH is None: return results
 
     try:
@@ -150,7 +153,6 @@ def run_full_inference(audio: np.ndarray) -> dict[str, Any]:
             pad_len = patch_size - len(mel_data)
             patches.append(np.pad(mel_data, ((0, pad_len), (0, 0)), mode='constant'))
 
-        # Fixed batch size processing for backbone
         batch_size = 64
         all_embeddings = []
         for i in range(0, len(patches), batch_size):
@@ -168,24 +170,39 @@ def run_full_inference(audio: np.ndarray) -> dict[str, Any]:
         for key, graph_def in _HEAD_GRAPHS.items():
             logits = _run_with_discovery(graph_def, track_embedding)
             probs = logits.flatten()
+            labels = _METADATA.get(key, {}).get("classes", [])
             
-            if key == "genre":
-                labels = _METADATA[key].get("classes", [])
-                results["genre"] = {labels[i]: float(probs[i]) for i in range(min(len(labels), len(probs)))}
+            if labels:
+                results[key] = {labels[i]: float(probs[i]) for i in range(min(len(labels), len(probs)))}
             else:
-                mood_name = key.replace("mood_", "")
-                results["moods"][mood_name] = float(probs[0])
+                # Fallback for binary heads if classes missing
+                results[key] = {"score": float(probs[0])}
 
     except Exception as e:
         logger.error(f"Inference failed: {e}")
         
     return results
 
+# High-level API for analyzer.py
 def run_genre_inference(audio: np.ndarray, sr: int = 44100) -> dict[str, float]:
     return run_full_inference(audio)["genre"]
 
 def run_mood_inference(audio: np.ndarray, sr: int = 44100) -> dict[str, float]:
-    return run_full_inference(audio)["moods"]
+    # Bridges to the new multi-task results
+    return run_full_inference(audio)["mood_theme"]
+
+def run_instrument_inference(audio: np.ndarray, sr: int = 44100) -> dict[str, float]:
+    return run_full_inference(audio)["instrumentation"]
+
+def run_voice_inference(audio: np.ndarray, sr: int = 44100) -> dict[str, Any]:
+    res = run_full_inference(audio)
+    return {
+        "voice_instrumental": res["voice_instrumental"],
+        "voice_gender": res["voice_gender"]
+    }
+
+def run_timbre_inference(audio: np.ndarray, sr: int = 44100) -> dict[str, float]:
+    return run_full_inference(audio)["timbre"]
 
 def run_embedding_inference(audio: np.ndarray, sr: int = 44100) -> np.ndarray | None:
     return run_full_inference(audio)["embedding"]
