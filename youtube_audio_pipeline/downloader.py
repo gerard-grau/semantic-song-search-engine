@@ -27,7 +27,7 @@ def download_to_ram(
     cookies_path: str | None = None
 ) -> tuple[bool, str | None, dict | None]:
     """
-    Fast-WAV Strategy with Cookie support to bypass bot detection.
+    Final Stable Downloader: Clean, resilient, and JS-aware.
     """
     ram_path = ensure_ram_path(ram_disk_path)
     
@@ -35,14 +35,13 @@ def download_to_ram(
     temp_template = str(ram_path / f"{unique_id}.%(ext)s")
 
     ydl_opts = {
-        "format": "bestaudio/best",
+        "format": "bestaudio/best", 
         "outtmpl": temp_template,
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "external_downloader": "aria2c",
         "external_downloader_args": ["-x", "16", "-s", "16", "-k", "1M"],
-        "cookiefile": cookies_path, # Pass the cookies here
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "wav",
@@ -53,6 +52,13 @@ def download_to_ram(
             "-acodec", "pcm_s16le"
         ],
     }
+    
+    # Enable JS Runtime if node is available
+    ydl_opts["js_runtime"] = "node"
+
+    # Only add cookiefile if explicitly provided and valid
+    if cookies_path and os.path.exists(cookies_path):
+        ydl_opts["cookiefile"] = cookies_path
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
