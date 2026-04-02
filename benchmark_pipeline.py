@@ -1,45 +1,54 @@
-import time
 import subprocess
-import os
+import time
+from itertools import product
 from pathlib import Path
 
-# Use 6 URLs for a quick but clear comparison
-URLS = [
-    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "https://www.youtube.com/watch?v=97_VJve7UVc",
-    "https://www.youtube.com/watch?v=CD-E-LDc384",
-    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "https://www.youtube.com/watch?v=97_VJve7UVc",
-    "https://www.youtube.com/watch?v=CD-E-LDc384"
-]
+# --- CONFIGURATION ---
+URLS_FILE = "youtube_audio_pipeline/urls.example.txt" # Use a list of ~16 songs
+OUTPUT_CSV = "data/processed/benchmark_results.csv"
 
-TEMP_CSV = "data/processed/benchmark_results.csv"
+# --- HYPERPARAMETER GRID ---
+DOWNLOADERS = [12, 24, 32]
+WORKERS = [4, 6, 8]
+BATCH_SIZES = [8, 16, 32]
 
-def run_test(name, flags):
-    print(f"\n🚀 Running Benchmark: {name}")
-    # Use 1 worker to clearly see the overlapping benefit of P-C
-    cmd = [".venv/bin/python3", "-m", "youtube_audio_pipeline.main", "--workers", "1", "--output-csv", TEMP_CSV] + flags
-    for url in URLS:
-        cmd.extend(["--url", url])
+results = []
+
+print(f"{'DL':<5} | {'Work':<5} | {'BS':<5} | {'Total Time':<10}")
+print("-" * 40)
+
+for d, w, b in product(DOWNLOADERS, WORKERS, BATCH_SIZES):
+    # Prepare Command
+    cmd = [
+        ".venv/bin/python3", "-m", "youtube_audio_pipeline.main",
+        "--urls-file", URLS_FILE,
+        "--downloaders", str(d),
+        "--workers", str(w),
+        "--batch-size", str(b),
+        "--output-csv", "data/processed/temp_bench.csv",
+        "--skip-pitch"
+    ]
+    
+    # Cleanup previous temp file
+    Path("data/processed/temp_bench.csv").unlink(missing_ok=True)
     
     start = time.time()
-    subprocess.run(cmd)
+    # Run the pipeline (silence output to keep benchmark clean)
+    process = subprocess.run(cmd, capture_output=True, text=True)
     duration = time.time() - start
     
-    if os.path.exists(TEMP_CSV): os.remove(TEMP_CSV)
-    return duration
+    if process.returncode == 0:
+        print(f"{d:<5} | {w:<5} | {b:<5} | {duration:>9.2f}s")
+        results.append((duration, d, w, b))
+    else:
+        print(f"{d:<5} | {w:<5} | {b:<5} | ❌ FAILED")
 
-results = {}
-
-# 1. Baseline
-results["Base (Serial DP+A)"] = run_test("Baseline", [])
-
-# 2. Producer-Consumer
-results["Producer-Consumer (Parallel D/A)"] = run_test("Producer-Consumer", ["--optimize"])
-
-print("\n" + "="*40)
-print("📈 BENCHMARK RESULTS (6 Tracks)")
-print("="*40)
-for name, duration in results.items():
-    print(f"{name:35} | {duration:.2f}s")
-print("="*40)
+if results:
+    best = min(results)
+    print("-" * 40)
+    print(f"🏆 BEST SETTINGS: {best[0]:.2f}s")
+    print(f"   --downloaders {best[1]} --workers {best[2]} --batch-size {best[3]}")
+    
+    # Final recommendation
+    print(f"\n🚀 Recommended Command:")
+    print(f".venv/bin/python3 -m youtube_audio_pipeline.main --downloaders {best[1]} --workers {best[2]} --batch-size {best[3]} --skip-pitch")

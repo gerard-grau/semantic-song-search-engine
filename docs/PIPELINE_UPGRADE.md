@@ -18,8 +18,8 @@ We identified that compressed audio formats (MP3/Opus) require significant CPU m
 *   **Result**: 100% stable duplicate processing. No more "File Not Found" errors.
 
 ### 3. Continuous Triple-Queue Flow
-*   **Stage 1 (Downloaders)**: 24 parallel threads fetching raw audio to RAM.
-*   **Stage 2 (Analyzers)**: 6 CPU workers performing spectral and rhythmic math.
+*   **Stage 1 (Downloaders)**: Parallel threads fetching raw audio to RAM.
+*   **Stage 2 (Analyzers)**: CPU workers performing spectral and rhythmic math.
 *   **Stage 3 (Inference)**: GPU processing ML batches with a 2s "Heartbeat" to prevent starvation.
 
 ---
@@ -43,3 +43,22 @@ export LD_LIBRARY_PATH=$(pwd)/.venv/nvidia_fix:$(.venv/bin/python3 -c 'import os
 *   **Steady State Speed**: ~2.5 seconds per full-length song.
 *   **Hourly Throughput**: ~1,400 songs per hour.
 *   **Full 10k Run**: ~7 Hours.
+
+---
+
+## 📊 Hyperparameter Benchmarking
+
+To find the absolute best settings for a specific machine, use the provided **`benchmark_pipeline.py`** script. This script performs a grid search across Downloaders, Workers, and Batch Sizes.
+
+### How to use:
+1.  **Prepare a benchmark list**: Create a file with at least 32 URLs (doubling your existing list is a good strategy).
+    ```bash
+    cat youtube_audio_pipeline/urls.example.txt youtube_audio_pipeline/urls.example.txt > youtube_audio_pipeline/urls.benchmark.txt
+    ```
+2.  **Run the script**:
+    ```bash
+    .venv/bin/python3 benchmark_pipeline.py
+    ```
+3.  **Review the results**: The script will output a table of results and highlight the **🏆 BEST SETTINGS** and the corresponding command to use for your massive run.
+
+This ensures that network latency and CPU core performance are perfectly balanced for your environment.

@@ -1,14 +1,4 @@
-# Use a representative sample from your production-like dataset
-# Keep one URL per line
-https://www.youtube.com/watch?v=jNQXAC9IVRw
-https://www.youtube.com/watch?v=3JZ_D3ELwOQ
-https://www.youtube.com/watch?v=kXYiU_JCYtU
-https://www.youtube.com/watch?v=9bZkp7q19f0
-https://www.youtube.com/watch?v=OPf0YbXqDm0
-https://www.youtube.com/watch?v=fJ9rUzIMcZQ
-https://www.youtube.com/watch?v=oRdxUFDoQe0
-https://www.youtube.com/watch?v=CevxZvSJLk8
-https://www.youtube.com/watch?v=RgKAFK5djSk
+# Diversified Test Set
 https://www.youtube.com/watch?v=dQw4w9WgXcQ
 https://www.youtube.com/watch?v=w2Yh9sxfTd8
 https://www.youtube.com/watch?v=mj1ycQOY77o
@@ -25,3 +15,19 @@ https://www.youtube.com/watch?v=WTJSt4wP2ME
 https://www.youtube.com/watch?v=wuJIqmha2Hk
 https://www.youtube.com/watch?v=pmFQCGvyxac
 https://www.youtube.com/watch?v=WakP10DXiD0
+https://www.youtube.com/watch?v=cyQz_HDm-Is
+https://www.youtube.com/watch?v=AyXDz7p3W0w
+https://www.youtube.com/watch?v=K-6XDY_prxM
+https://www.youtube.com/watch?v=BiE5Uhaoqz8
+https://www.youtube.com/watch?v=7FfYsRuwEaE
+https://www.youtube.com/watch?v=8uhwokO7YEY
+https://www.youtube.com/watch?v=9E5ah27Ipvw
+https://www.youtube.com/watch?v=Y1WImYQ7r_E
+https://www.youtube.com/watch?v=T0GdzgDq5Z4
+https://www.youtube.com/watch?v=aX4eZ1fpYwA
+https://www.youtube.com/watch?v=QzNwIDpJjJU
+https://www.youtube.com/watch?v=0nUUQNAKJJs
+https://www.youtube.com/watch?v=MI19iKuNeHg
+https://www.youtube.com/watch?v=Gs17YhNfKtw
+https://www.youtube.com/watch?v=IKtzww4RFDc
+https://www.youtube.com/watch?v=Ku_mW8UI1tY
