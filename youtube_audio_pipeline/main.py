@@ -52,9 +52,11 @@ def run_production_pipeline(
     start_time = time.time()
     
     download_queue = queue.Queue(maxsize=10)
+    # The queue now holds (base_data, ml_patches)
     inference_queue = queue.Queue(maxsize=ml_batch_size * 2)
     processed_count = 0
     
+    # 1. Producer: Downloader
     def downloader_worker():
         for url_entry in urls:
             success, filepath, metadata = download_to_ram(url_entry['url'], ram_disk_path)
@@ -62,25 +64,32 @@ def run_production_pipeline(
             else: download_queue.put(None)
         for _ in range(num_analyzers): download_queue.put("DONE")
 
+    # 2. Consumer 1: Parallel Base Extraction + Parallel ML Preprocessing
     def analyzer_worker():
         while True:
             item = download_queue.get()
             if item == "DONE": break
             if item is None: continue
+            
             filepath, metadata, source_input = item
             filepath_obj = Path(filepath)
-            base_res = extract_base_features(filepath_obj, metadata)
+            
+            # extract_base_features now returns (res_dict, ml_patches)
+            res = extract_base_features(filepath_obj, metadata, skip_models)
             if filepath_obj.exists(): filepath_obj.unlink()
-            if base_res:
-                base_data, audio_16k = base_res
+            
+            if res:
+                base_data, ml_patches = res
                 base_data["SourceInput"] = source_input
-                inference_queue.put((base_data, audio_16k))
+                inference_queue.put((base_data, ml_patches))
         inference_queue.put("DONE")
 
+    # 3. Consumer 2: Batch ML Inference (Pure Matrix Math)
     def inference_manager():
         nonlocal processed_count
         active_analyzers = num_analyzers
         pending_batch = []
+        
         while active_analyzers > 0:
             try:
                 item = inference_queue.get(timeout=1)
@@ -88,6 +97,7 @@ def run_production_pipeline(
                     active_analyzers -= 1
                     continue
                 pending_batch.append(item)
+                
                 if len(pending_batch) >= ml_batch_size:
                     _run_batch(pending_batch)
                     processed_count += len(pending_batch)
@@ -99,21 +109,38 @@ def run_production_pipeline(
                     pending_batch = []
 
     def _run_batch(batch):
-        all_patches = [model_inference.preprocess_audio(audio_16k) for _, audio_16k in batch]
-        ml_batch_results = model_inference.run_batch_inference(all_patches)
+        # ml_patches are already computed in parallel!
+        list_of_patches = [item[1] for item in batch]
+        
+        # ML Inference
+        if not skip_models:
+            ml_batch_results = model_inference.run_batch_inference(list_of_patches)
+        else:
+            ml_batch_results = [{} for _ in batch]
+        
+        # Merge and Save
         completed_rows = []
         for i, (base_data, _) in enumerate(batch):
             final_row = finalize_song_data(base_data, ml_batch_results[i])
             completed_rows.append(final_row)
-            print(f"✅ Processed: {final_row['Title']}")
+            
+            # Calculate ETA
+            elapsed = time.time() - start_time
+            avg = elapsed / (processed_count + i + 1)
+            eta = avg * (total_count - (processed_count + i + 1))
+            print(f"[{processed_count + i + 1}/{total_count}] ✅ Processed: {final_row['Title']} | ETA: {format_duration(eta)}")
+        
         save_to_dataframe(completed_rows, output_csv)
 
+    # Start Threads
     d_thread = threading.Thread(target=downloader_worker)
     a_threads = [threading.Thread(target=analyzer_worker) for _ in range(num_analyzers)]
     i_thread = threading.Thread(target=inference_manager)
+    
     d_thread.start()
     for t in a_threads: t.start()
     i_thread.start()
+    
     d_thread.join()
     for t in a_threads: t.join()
     i_thread.join()
@@ -143,7 +170,13 @@ def main() -> None:
     if not urls: return
     if not args.skip_models: model_inference.initialize_models_globally()
 
-    run_production_pipeline(urls, args.output_csv, num_analyzers=args.workers, ml_batch_size=args.batch_size, skip_models=args.skip_models)
+    run_production_pipeline(
+        urls, 
+        args.output_csv, 
+        num_analyzers=args.workers, 
+        ml_batch_size=args.batch_size, 
+        skip_models=args.skip_models
+    )
 
 if __name__ == "__main__":
     main()

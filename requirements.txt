@@ -7,3 +7,5 @@ pydantic>=2.7,<3.0
 yt-dlp>=2025.1.15
 essentia>=2.1b6.dev0
 pandas>=2.2,<3.0
+numpy>=1.26,<2.0
+tensorflow>=2.16,<3.0

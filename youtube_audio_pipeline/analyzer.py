@@ -38,21 +38,20 @@ ALL_MOODS = [
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
-def extract_base_features(filepath: Path, metadata: dict) -> tuple[dict, np.ndarray] | None:
+def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = False) -> tuple[dict, np.ndarray | None] | None:
     """
-    Stage 1: Extract standard audio features and return partial result + 16kHz audio for ML.
+    Stage 1: CPU-intensive feature extraction + Parallel Mel-Preprocessing.
     """
     try:
         sample_rate = 44100
         loader = es.MonoLoader(filename=str(filepath), sampleRate=sample_rate)
         audio = loader()
 
-        # Rhythm & Beats
+        # 1. Rhythm & Beats
         rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
         bpm, beats, beats_confidence, _, _ = rhythm_extractor(audio)
-        beat_count = len(beats)
 
-        # Onset Detection
+        # 2. Onset Detection
         od_hfc = es.OnsetDetection(method="hfc")
         w_od = es.Windowing(type="hann")
         fft_od = es.FFT()
@@ -65,14 +64,14 @@ def extract_base_features(filepath: Path, metadata: dict) -> tuple[dict, np.ndar
         onset_times = onsets_alg(essentia.array([det_func]), [1])
         onset_count = len(onset_times)
 
-        # Key & Energy
+        # 3. Key, Loudness, Energy
         key, scale, strength = es.KeyExtractor()(audio)
         overall_loudness = es.Loudness()(audio)
         duration = len(audio) / sample_rate
         rms_energy = np.sqrt(np.mean(audio**2))
         dance_alg_val, _ = es.Danceability()(audio)
 
-        # Spectral Detail (Averaged)
+        # 4. Spectral Averages
         centroids, rolloffs, flatness, mfccs, hpcps = [], [], [], [], []
         w = es.Windowing(type="hann")
         fft = es.FFT()
@@ -97,10 +96,13 @@ def extract_base_features(filepath: Path, metadata: dict) -> tuple[dict, np.ndar
                 hpcps.append(hpcp_alg(f, m))
             except: pass
 
-        # Resample once for ML (16kHz)
-        audio_16k = es.Resample(inputSampleRate=sample_rate, outputSampleRate=16000)(audio)
+        # 5. Parallel Mel-Preprocessing (Move 16kHz resampling and patch creation here)
+        ml_patches = None
+        if not skip_models:
+            audio_16k = es.Resample(inputSampleRate=sample_rate, outputSampleRate=16000)(audio)
+            ml_patches = model_inference.preprocess_audio(audio_16k)
 
-        # Partial result dictionary
+        # 6. Partial Result
         res = {
             "YouTubeID": metadata.get("id", "Unknown"),
             "Title": metadata.get("title", "Unknown"),
@@ -112,13 +114,13 @@ def extract_base_features(filepath: Path, metadata: dict) -> tuple[dict, np.ndar
             "LikeCount": int(metadata.get("like_count", 0)),
             "BPM": float(bpm),
             "Key": f"{key} {scale}",
-            "Scale": str(scale), # Internal for valence
+            "Scale": str(scale),
             "KeyStrength": float(strength),
             "Loudness": float(overall_loudness),
             "DurationSeconds": float(duration),
             "RmsEnergy": float(rms_energy),
             "BeatConfidence": float(beats_confidence),
-            "BeatCount": int(beat_count),
+            "BeatCount": int(len(beats)),
             "OnsetRate": float(onset_count / duration) if duration > 0 else 0.0,
             "OnsetCount": int(onset_count),
             "RawDanceability": float(dance_alg_val),
@@ -130,7 +132,7 @@ def extract_base_features(filepath: Path, metadata: dict) -> tuple[dict, np.ndar
             "AvgHPCP": np.mean(hpcps, axis=0) if hpcps else np.zeros(12),
         }
         
-        # Pitch Detection (Melodia)
+        # Pitch (Heavy)
         try:
             pitch_vals, pitch_conf = es.PredominantPitchMelodia(sampleRate=sample_rate)(audio)
             valid = pitch_vals[pitch_conf > 0.3]
@@ -139,7 +141,7 @@ def extract_base_features(filepath: Path, metadata: dict) -> tuple[dict, np.ndar
         except:
             res["PitchMeanHz"], res["PitchStdHz"] = 0.0, 0.0
 
-        return res, audio_16k
+        return res, ml_patches
 
     except Exception as e:
         logger.error(f"Base extraction failed: {e}")
@@ -147,9 +149,9 @@ def extract_base_features(filepath: Path, metadata: dict) -> tuple[dict, np.ndar
 
 def finalize_song_data(base_data: dict, ml_res: dict) -> dict:
     """
-    Stage 3: Merge base features with ML inference results.
+    Stage 3: Merge base features with pre-computed ML results.
     """
-    # 1. Parse Genre
+    # Parse Genre
     genre_probs = ml_res.get("genre", {})
     genre_top_label, genre_top_confidence = "Unknown", 0.0
     genre_top_parent = "Unknown"
@@ -166,25 +168,23 @@ def finalize_song_data(base_data: dict, ml_res: dict) -> dict:
             col_name = f"Genre_{g.replace(' ', '').replace(',', '').replace('&', 'And').replace('/', 'Or')}"
             if g in parent_scores: genre_parent_flat[col_name] = float(parent_scores[g])
 
-    # 2. Parse Moods/Themes
+    # Parse Moods
     mood_theme_probs = ml_res.get("mood_theme", {})
     mood_theme_flat = {f"Mood_{m}": 0.0 for m in ALL_MOODS}
     for m in ALL_MOODS:
         if m in mood_theme_probs: mood_theme_flat[f"Mood_{m}"] = float(mood_theme_probs[m])
 
-    # 3. High-level Proxies
-    # Valence
+    # High-level Proxies
     major_flag = 1.0 if base_data["Scale"].lower() == "major" else 0.35
     c_norm = _clamp(base_data["SpectralCentroidHz"] / 4000.0)
     l_norm = _clamp((base_data["Loudness"] + 45.0) / 45.0)
     valence = _clamp(0.45 * major_flag + 0.35 * c_norm + 0.2 * l_norm)
     
-    # Danceability
     m_party = mood_theme_flat.get("Mood_party", 0.0)
     m_energetic = mood_theme_flat.get("Mood_energetic", 0.0)
     danceability = _clamp(0.4 * base_data["RawDanceability"] + 0.3 * m_party + 0.2 * m_energetic + 0.1 * base_data["BeatConfidence"])
 
-    # 4. Final Assemblage
+    # Final Result
     result = {
         "YouTubeID": base_data["YouTubeID"],
         "Title": base_data["Title"],
@@ -222,12 +222,9 @@ def finalize_song_data(base_data: dict, ml_res: dict) -> dict:
     
     result.update(mood_theme_flat)
     result.update(genre_parent_flat)
-    
-    # Flatten MFCC/HPCP
     for i, v in enumerate(base_data["AvgMFCC"]): result[f"MFCC_{i+1}"] = float(v)
     for i, v in enumerate(base_data["AvgHPCP"]): result[f"HPCP_{i+1}"] = float(v)
     
-    # JSON Blobs
     result["GenreProbsJson"] = json.dumps(dict(sorted(genre_probs.items(), key=lambda x: x[1], reverse=True)[:5]))
     result["DiscogsEmbeddingJson"] = json.dumps(ml_res["embedding"].tolist()) if ml_res.get("embedding") is not None else "[]"
 
