@@ -15,6 +15,10 @@ import pandas as pd
 
 from youtube_audio_pipeline import model_inference
 
+# SILENCE: Suppress noisy Essentia "No network created" warnings
+essentia.log.infoActive = False
+essentia.log.warningActive = False
+
 logger = logging.getLogger(__name__)
 
 # High-level parent genres from Discogs taxonomy

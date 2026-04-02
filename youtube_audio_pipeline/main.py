@@ -6,10 +6,11 @@ import os
 import time
 import queue
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import csv
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from youtube_audio_pipeline.analyzer import extract_base_features, finalize_song_data, save_to_dataframe
+from youtube_audio_pipeline.analyzer import extract_base_features, finalize_song_data
 from youtube_audio_pipeline.downloader import download_to_ram
 from youtube_audio_pipeline.youtube_utils import normalize_youtube_input
 from youtube_audio_pipeline import model_inference
@@ -40,7 +41,21 @@ def format_duration(seconds: float) -> str:
     elif minutes > 0: return f"{minutes}m {secs}s"
     else: return f"{secs}s"
 
-def run_turbo_pipeline(
+def save_row_to_csv(row: dict, output_csv: str):
+    """
+    Saves a single row to CSV using the standard library (faster than pandas).
+    """
+    output_path = Path(output_csv)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    file_exists = output_path.exists()
+    with open(output_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=row.keys())
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+def run_production_pipeline(
     urls: list[dict[str, str | None]],
     output_csv: str,
     ram_disk_path: str = "/dev/shm/yt_audio",
@@ -54,37 +69,79 @@ def run_turbo_pipeline(
     total_count = len(urls)
     start_time = time.time()
     
-    # 1. Parallel Metadata Pre-Fetching (Hides network latency)
-    print(f"📡 Pre-fetching metadata for {total_count} songs...")
-    metadata_results = []
-    with ThreadPoolExecutor(max_workers=10) as meta_pool:
-        def fetch_meta(u_entry):
-            import yt_dlp
-            try:
-                with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
-                    info = ydl.extract_info(u_entry['url'], download=False)
-                    return info, u_entry['source_input']
-            except:
-                return None, u_entry['source_input']
-        metadata_results = list(meta_pool.map(fetch_meta, urls))
+    # 🏁 The Three Stages of the Pipeline
+    # 1. Download Queue: Raw URLs -> PCM on Disk
+    # 2. Analysis Queue: PCM on Disk -> Base Metrics + Mel Patches
+    # 3. Inference Queue: Mel Patches -> GPU Results -> CSV
     
-    print(f"✅ Metadata complete. Starting Turbo Run...")
-    
-    # Queues
+    analysis_queue = queue.Queue(maxsize=num_analyzers * 2)
     inference_queue = queue.Queue(maxsize=ml_batch_size * 2)
     processed_count = 0
-    
-    # 2. Adaptive Inference Manager (Heartbeat-based batching)
-    def inference_manager(total_to_process):
+
+    # --- Worker 1: The Downloader (Producer) ---
+    def downloader_manager():
+        with ThreadPoolExecutor(max_workers=num_downloaders) as pool:
+            futures = []
+            for url_entry in urls:
+                f = pool.submit(download_to_ram, url_entry['url'], ram_disk_path)
+                futures.append((f, url_entry['source_input']))
+            
+            for f, source_input in futures:
+                try:
+                    success, filepath, metadata = f.result()
+                    if success:
+                        analysis_queue.put((filepath, metadata, source_input))
+                    else:
+                        analysis_queue.put(None)
+                except Exception as e:
+                    logger.error(f"Download task failed: {e}")
+                    analysis_queue.put(None)
+        
+        # Signal analyzers we are done
+        for _ in range(num_analyzers):
+            analysis_queue.put("DONE")
+
+    # --- Worker 2: The Analyzer (CPU Intensive) ---
+    def analyzer_worker():
+        while True:
+            item = analysis_queue.get()
+            if item == "DONE": break
+            if item is None: 
+                inference_queue.put(None)
+                continue
+            
+            filepath, metadata, source_input = item
+            try:
+                res = extract_base_features(Path(filepath), metadata, skip_models, skip_pitch)
+                # Cleanup unique file immediately
+                if os.path.exists(filepath): os.remove(filepath)
+                
+                if res:
+                    base_data, patches = res
+                    base_data["SourceInput"] = source_input
+                    inference_queue.put((base_data, patches))
+                else:
+                    inference_queue.put(None)
+            except Exception as e:
+                logger.error(f"Analysis failed for {source_input}: {e}")
+                inference_queue.put(None)
+        
+        # Signal inference manager
+        inference_queue.put("DONE")
+
+    # --- Worker 3: The Inference Manager (GPU & Disk) ---
+    def inference_manager():
         nonlocal processed_count
+        active_analyzers = num_analyzers
         pending_batch = []
-        received = 0
         last_inference_time = time.time()
         
-        while received < total_to_process:
+        while active_analyzers > 0:
             try:
                 item = inference_queue.get(timeout=1.0)
-                received += 1
+                if item == "DONE":
+                    active_analyzers -= 1
+                    continue
                 if item is not None:
                     pending_batch.append(item)
             except queue.Empty:
@@ -95,14 +152,13 @@ def run_turbo_pipeline(
                     last_inference_time = time.time()
                 continue
 
-            # Batch logic: Either the bucket is full, or the heartbeat timeout (2s) reached
-            if len(pending_batch) >= ml_batch_size or (time.time() - last_inference_time > 2.0):
-                if pending_batch:
-                    _run_batch(pending_batch)
-                    processed_count += len(pending_batch)
-                    pending_batch = []
-                    last_inference_time = time.time()
-        
+            # Heartbeat logic
+            if len(pending_batch) >= ml_batch_size or (pending_batch and time.time() - last_inference_time > 2.0):
+                _run_batch(pending_batch)
+                processed_count += len(pending_batch)
+                pending_batch = []
+                last_inference_time = time.time()
+
         if pending_batch:
             _run_batch(pending_batch)
             processed_count += len(pending_batch)
@@ -114,75 +170,35 @@ def run_turbo_pipeline(
         else:
             ml_batch_results = [{"embedding": None} for _ in batch]
         
-        completed_rows = []
         for i, (base_data, _) in enumerate(batch):
             final_row = finalize_song_data(base_data, ml_batch_results[i])
-            completed_rows.append(final_row)
+            save_row_to_csv(final_row, output_csv)
             
             idx = processed_count + i + 1
             elapsed = time.time() - start_time
             avg = elapsed / idx
             eta = avg * (total_count - idx)
             print(f"[{idx}/{total_count}] ✅ Processed: {final_row['Title']} | ETA: {format_duration(eta)}")
-        
-        save_to_dataframe(completed_rows, output_csv)
 
-    # 3. Unified Execution Pool (Decoupled Download/Analysis)
-    inf_thread = threading.Thread(target=inference_manager, args=(total_count,))
-    inf_thread.start()
+    # 🚀 Start all threads
+    d_thread = threading.Thread(target=downloader_manager)
+    a_threads = [threading.Thread(target=analyzer_worker) for _ in range(num_analyzers)]
+    i_thread = threading.Thread(target=inference_manager)
 
-    with ThreadPoolExecutor(max_workers=num_downloaders + num_analyzers) as pool:
-        # Step A: Downloaders (Submitting all tasks to the pool)
-        download_futures = []
-        for meta_res in metadata_results:
-            info, source_input = meta_res
-            if not info:
-                inference_queue.put(None)
-                continue
-            
-            def d_task(u, s):
-                return download_to_ram(u, ram_disk_path), s
-            
-            f = pool.submit(d_task, info['webpage_url'], source_input)
-            download_futures.append(f)
-            
-        # Step B: Analyzers (Triggered as downloads complete)
-        for df in as_completed(download_futures):
-            download_res, source_input = df.result()
-            success, filepath, metadata = download_res
-            
-            if not success or not filepath:
-                inference_queue.put(None)
-                continue
-            
-            def a_task(fp, meta, src):
-                res = extract_base_features(Path(fp), meta, skip_models, skip_pitch)
-                if Path(fp).exists(): Path(fp).unlink()
-                if res:
-                    base_data, patches = res
-                    base_data["SourceInput"] = src
-                    return (base_data, patches)
-                return None
-            
-            # Submit analysis task
-            af = pool.submit(a_task, filepath, metadata, source_input)
-            
-            # Callback to feed the inference manager
-            def push_to_inf(fut):
-                try:
-                    inference_queue.put(fut.result())
-                except:
-                    inference_queue.put(None)
-            
-            af.add_done_callback(push_to_inf)
+    d_thread.start()
+    for t in a_threads: t.start()
+    i_thread.start()
 
-    inf_thread.join()
+    d_thread.join()
+    for t in a_threads: t.join()
+    i_thread.join()
+
     total_time = time.time() - start_time
-    print(f"\nTurbo Pipeline finished in {format_duration(total_time)}.")
+    print(f"\nProduction Pipeline finished in {format_duration(total_time)}.")
     return processed_count, processed_count
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="YouTube Audio Pipeline Production v1.2.0")
+    parser = argparse.ArgumentParser(description="YouTube Audio Pipeline Production v1.4.0")
     parser.add_argument("--urls-file", type=str, default="youtube_audio_pipeline/urls.example.txt")
     parser.add_argument("--url", action="append")
     parser.add_argument("--output-csv", type=str, default="data/processed/youtube_song_characteristics.csv")
@@ -204,7 +220,7 @@ def main() -> None:
     if not urls: return
     if not args.skip_models: model_inference.initialize_models_globally()
 
-    run_turbo_pipeline(
+    run_production_pipeline(
         urls, 
         args.output_csv, 
         num_downloaders=args.downloaders,
