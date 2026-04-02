@@ -48,17 +48,17 @@ export LD_LIBRARY_PATH=$(pwd)/.venv/nvidia_fix:$(.venv/bin/python3 -c 'import os
 
 ## 📊 Hyperparameter Benchmarking
 
-To find the absolute best settings for a specific machine, use the provided **`benchmark_pipeline.py`** script. This script performs a grid search across Downloaders, Workers, and Batch Sizes.
+To find the absolute best settings for your hardware, use the provided benchmark tool.
 
 ### How to use:
-1.  **Prepare a benchmark list**: Create a file with at least 32 URLs (doubling your existing list is a good strategy).
+1.  **Prepare the benchmark list** (32 tracks):
     ```bash
     cat youtube_audio_pipeline/urls.example.txt youtube_audio_pipeline/urls.example.txt > youtube_audio_pipeline/urls.benchmark.txt
     ```
 2.  **Run the script**:
     ```bash
-    .venv/bin/python3 benchmark_pipeline.py
+    .venv/bin/python3 youtube_audio_pipeline/benchmark.py
     ```
-3.  **Review the results**: The script will output a table of results and highlight the **🏆 BEST SETTINGS** and the corresponding command to use for your massive run.
+3.  **Review the results**: The script will output a table and highlight the **🏆 BEST SETTINGS** for your server.
 
 This ensures that network latency and CPU core performance are perfectly balanced for your environment.

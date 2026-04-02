@@ -4,7 +4,7 @@ from itertools import product
 from pathlib import Path
 
 # --- CONFIGURATION ---
-URLS_FILE = "youtube_audio_pipeline/urls.example.txt" # Use a list of ~16 songs
+URLS_FILE = "youtube_audio_pipeline/urls.benchmark.txt" # Finalized internal path
 OUTPUT_CSV = "data/processed/benchmark_results.csv"
 
 # --- HYPERPARAMETER GRID ---
@@ -33,7 +33,7 @@ for d, w, b in product(DOWNLOADERS, WORKERS, BATCH_SIZES):
     Path("data/processed/temp_bench.csv").unlink(missing_ok=True)
     
     start = time.time()
-    # Run the pipeline (silence output to keep benchmark clean)
+    # Run the pipeline
     process = subprocess.run(cmd, capture_output=True, text=True)
     duration = time.time() - start
     
