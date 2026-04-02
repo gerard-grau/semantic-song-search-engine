@@ -8,8 +8,6 @@ from pathlib import Path
 
 import yt_dlp
 
-from youtube_audio_pipeline.youtube_utils import canonical_watch_url
-
 logger = logging.getLogger(__name__)
 
 def ensure_ram_path(ram_disk_path: str = "/dev/shm/yt_audio") -> Path:
@@ -28,11 +26,11 @@ def download_to_ram(
     ram_disk_path: str = "/dev/shm/yt_audio",
 ) -> tuple[bool, str | None, dict | None]:
     """
-    Downloads audio and resamples to 16kHz using a UNIQUE filename to avoid race conditions.
+    Fast-WAV Strategy: Pull native audio and use a HIGH-SPEED PCM conversion.
+    PCM is the fastest to encode because it uses no compression math.
     """
     ram_path = ensure_ram_path(ram_disk_path)
     
-    # Use UUID to prevent multiple workers from stepping on each other
     unique_id = str(uuid.uuid4())
     temp_template = str(ram_path / f"{unique_id}.%(ext)s")
 
@@ -47,18 +45,17 @@ def download_to_ram(
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "wav",
-            "preferredquality": "192",
         }],
         "postprocessor_args": [
             "-ar", "16000",
-            "-ac", "1"
+            "-ac", "1",
+            "-acodec", "pcm_s16le" # FASTEST: No compression math
         ],
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            # The actual file will be .wav regardless of what YouTube sent
             filepath = str(ram_path / f"{unique_id}.wav")
             
             metadata = {
