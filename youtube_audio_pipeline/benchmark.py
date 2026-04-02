@@ -29,6 +29,10 @@ for d, w, b in product(DOWNLOADERS, WORKERS, BATCH_SIZES):
         "--skip-pitch"
     ]
     
+    # Add cookies if they exist in the environment or as a file
+    if Path("cookies.txt").exists():
+        cmd.extend(["--cookies", "cookies.txt"])
+    
     # Cleanup previous temp file
     Path("data/processed/temp_bench.csv").unlink(missing_ok=True)
     

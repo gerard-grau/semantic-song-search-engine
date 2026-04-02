@@ -64,15 +64,13 @@ def run_production_pipeline(
     ml_batch_size: int = 16,
     skip_models: bool = False,
     skip_pitch: bool = False,
+    cookies_path: str | None = None
 ) -> tuple[int, int]:
     if not urls: return 0, 0
     total_count = len(urls)
     start_time = time.time()
     
-    # 🏁 The Three Stages of the Pipeline
-    # 1. Download Queue: Raw URLs -> PCM on Disk
-    # 2. Analysis Queue: PCM on Disk -> Base Metrics + Mel Patches
-    # 3. Inference Queue: Mel Patches -> GPU Results -> CSV
+    # ... rest of code ...
     
     analysis_queue = queue.Queue(maxsize=num_analyzers * 2)
     inference_queue = queue.Queue(maxsize=ml_batch_size * 2)
@@ -83,7 +81,7 @@ def run_production_pipeline(
         with ThreadPoolExecutor(max_workers=num_downloaders) as pool:
             futures = []
             for url_entry in urls:
-                f = pool.submit(download_to_ram, url_entry['url'], ram_disk_path)
+                f = pool.submit(download_to_ram, url_entry['url'], ram_disk_path, cookies_path)
                 futures.append((f, url_entry['source_input']))
             
             for f, source_input in futures:
@@ -207,6 +205,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--skip-models", action="store_true")
     parser.add_argument("--skip-pitch", action="store_true")
+    parser.add_argument("--cookies", type=str, help="Path to cookies.txt file for YouTube authentication.")
     args = parser.parse_args()
 
     urls = []
@@ -214,11 +213,19 @@ def main() -> None:
         for u in args.url:
             u_norm, vid_id = normalize_youtube_input(u)
             urls.append({"url": u_norm, "youtube_id": vid_id, "source_input": u})
-    if args.urls_file and os.path.exists(args.urls_file):
-        urls.extend(load_urls(args.urls_file))
+    
+    if args.urls_file:
+        if os.path.exists(args.urls_file):
+            urls.extend(load_urls(args.urls_file))
+        else:
+            logger.warning(f"URLs file not found: {args.urls_file}")
 
-    if not urls: return
-    if not args.skip_models: model_inference.initialize_models_globally()
+    if not urls:
+        print("❌ Error: No URLs provided. Use --url [URL] or --urls-file [PATH].")
+        return
+
+    if not args.skip_models:
+        model_inference.initialize_models_globally()
 
     run_production_pipeline(
         urls, 
@@ -227,7 +234,8 @@ def main() -> None:
         num_analyzers=args.workers, 
         ml_batch_size=args.batch_size, 
         skip_models=args.skip_models,
-        skip_pitch=args.skip_pitch
+        skip_pitch=args.skip_pitch,
+        cookies_path=args.cookies
     )
 
 if __name__ == "__main__":

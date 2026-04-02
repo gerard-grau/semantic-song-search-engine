@@ -24,10 +24,10 @@ def ensure_ram_path(ram_disk_path: str = "/dev/shm/yt_audio") -> Path:
 def download_to_ram(
     url: str,
     ram_disk_path: str = "/dev/shm/yt_audio",
+    cookies_path: str | None = None
 ) -> tuple[bool, str | None, dict | None]:
     """
-    Fast-WAV Strategy: Pull native audio and use a HIGH-SPEED PCM conversion.
-    PCM is the fastest to encode because it uses no compression math.
+    Fast-WAV Strategy with Cookie support to bypass bot detection.
     """
     ram_path = ensure_ram_path(ram_disk_path)
     
@@ -42,6 +42,7 @@ def download_to_ram(
         "noplaylist": True,
         "external_downloader": "aria2c",
         "external_downloader_args": ["-x", "16", "-s", "16", "-k", "1M"],
+        "cookiefile": cookies_path, # Pass the cookies here
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "wav",
@@ -49,7 +50,7 @@ def download_to_ram(
         "postprocessor_args": [
             "-ar", "16000",
             "-ac", "1",
-            "-acodec", "pcm_s16le" # FASTEST: No compression math
+            "-acodec", "pcm_s16le"
         ],
     }
 

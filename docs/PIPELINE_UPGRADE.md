@@ -4,23 +4,28 @@ This document provides a technical overview of the production-grade enhancements
 
 ---
 
-## 🚀 Ultimate Turbo Architecture (v1.4.1)
+## 🚀 Ultimate Turbo Architecture (v1.4.2)
 
 We have achieved the **absolute peak throughput** for this hardware, reducing the end-to-end time for 10,000 songs to approximately **7 hours**.
 
-### 1. Fast-WAV Strategy (The Codec Fix)
-We identified that compressed audio formats (MP3/Opus) require significant CPU math to encode and decode.
-*   **The Fix**: The pipeline now uses **PCM s16le** (raw audio) at 16kHz. 
-*   **Result**: Zero compression math. `ffmpeg` writes the file at lightning speed, and Essentia reads it instantly. This dropped the "Steady State" processing time to ~2.5s per song.
+### 🛠️ Key Stability & Performance Features:
+1.  **Fast-WAV Strategy**: Uses raw **PCM s16le** (raw audio) at 16kHz to eliminate CPU compression overhead.
+2.  **Unique Worker Isolation**: UUID-based filenames in RAM to prevent race conditions.
+3.  **Continuous Triple-Queue Flow**: Maximizes hardware overlap between Downloaders, Analyzers, and the GPU.
+4.  **Bot Wall Bypass**: Support for **Netscape Cookies** to prevent YouTube from blocking the server during high-concurrency runs.
 
-### 2. Unique Worker Isolation
-*   **The Fix**: Every worker uses a private **UUID** for its temporary RAM file.
-*   **Result**: 100% stable duplicate processing. No more "File Not Found" errors.
+---
 
-### 3. Continuous Triple-Queue Flow
-*   **Stage 1 (Downloaders)**: Parallel threads fetching raw audio to RAM.
-*   **Stage 2 (Analyzers)**: CPU workers performing spectral and rhythmic math.
-*   **Stage 3 (Inference)**: GPU processing ML batches with a 2s "Heartbeat" to prevent starvation.
+## 🛡️ Bypassing Bot Detection (Sign in to confirm you're not a bot)
+
+When processing thousands of songs at high speed, YouTube may block your server IP. To fix this:
+1.  **Export Cookies**: Use a browser extension (like "Get cookies.txt LOCALLY") to export your YouTube cookies in **Netscape format**.
+2.  **Save as `cookies.txt`**: Place the file in the project root.
+3.  **Run with Cookies**:
+    ```bash
+    .venv/bin/python3 -m youtube_audio_pipeline.main --cookies cookies.txt [OTHER FLAGS]
+    ```
+    *Note: `benchmark.py` will automatically detect and use `cookies.txt` if it exists in the root.*
 
 ---
 
@@ -31,12 +36,13 @@ We identified that compressed audio formats (MP3/Opus) require significant CPU m
 # 1. Set GPU library path
 export LD_LIBRARY_PATH=$(pwd)/.venv/nvidia_fix:$(.venv/bin/python3 -c 'import os, sys; from glob import glob; print(":".join(set(os.path.dirname(p) for p in glob(sys.prefix + "/lib/python*/site-packages/nvidia/*/lib/*.so*"))))'):/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
-# 2. Run the Engine with Overclocked Network Settings
+# 2. Run with Peak Performance and Cookies
 .venv/bin/python3 -m youtube_audio_pipeline.main \
   --downloaders 24 \
   --workers 6 \
   --batch-size 16 \
-  --skip-pitch
+  --skip-pitch \
+  --cookies cookies.txt
 ```
 
 ### Verified Capacity:
@@ -48,17 +54,8 @@ export LD_LIBRARY_PATH=$(pwd)/.venv/nvidia_fix:$(.venv/bin/python3 -c 'import os
 
 ## 📊 Hyperparameter Benchmarking
 
-To find the absolute best settings for your hardware, use the provided benchmark tool.
-
-### How to use:
-1.  **Prepare the benchmark list** (32 tracks):
-    ```bash
-    cat youtube_audio_pipeline/urls.example.txt youtube_audio_pipeline/urls.example.txt > youtube_audio_pipeline/urls.benchmark.txt
-    ```
-2.  **Run the script**:
-    ```bash
-    .venv/bin/python3 youtube_audio_pipeline/benchmark.py
-    ```
-3.  **Review the results**: The script will output a table and highlight the **🏆 BEST SETTINGS** for your server.
-
-This ensures that network latency and CPU core performance are perfectly balanced for your environment.
+To find the absolute best settings for your specific hardware, run:
+```bash
+.venv/bin/python3 youtube_audio_pipeline/benchmark.py
+```
+*Tip: Ensure `cookies.txt` is present to avoid bot detection during the benchmark.*
