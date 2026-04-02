@@ -5,6 +5,7 @@ import logging
 import os
 import subprocess
 import uuid
+import time
 from pathlib import Path
 
 import essentia
@@ -40,10 +41,12 @@ def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
 
 def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = False, skip_pitch: bool = False) -> tuple[dict, np.ndarray | None] | None:
     """
-    Stage 1: Optimized feature extraction at 16kHz with fixed filter-banks.
+    Stage 1: Optimized feature extraction at 16kHz.
     """
     try:
         sample_rate = 16000
+        
+        # Load audio at 16kHz
         loader = es.MonoLoader(filename=str(filepath), sampleRate=sample_rate)
         audio = loader()
 
@@ -52,6 +55,13 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
         bpm, beats, beats_confidence, _, _ = rhythm_extractor(audio)
         beat_count = len(beats)
         
+        # 2. Key & Energy
+        key, scale, strength = es.KeyExtractor()(audio)
+        overall_loudness = es.Loudness()(audio)
+        rms_energy = np.sqrt(np.mean(audio**2))
+        dance_alg_val, _ = es.Danceability()(audio)
+
+        # 3. Spectral Loop (Unified for efficiency)
         od_hfc = es.OnsetDetection(method="hfc")
         w = es.Windowing(type="hann")
         fft = es.FFT()
@@ -59,14 +69,7 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
         
         det_func = []
         centroids, rolloffs, flatness, mfccs, hpcps = [], [], [], [], []
-        
-        # MFCC configuration: Corrected parameter name highFrequencyBound
-        mfcc_alg = es.MFCC(
-            numberCoefficients=13, 
-            inputSize=513, 
-            sampleRate=sample_rate,
-            highFrequencyBound=8000 # Correct parameter name
-        )
+        mfcc_alg = es.MFCC(numberCoefficients=13, inputSize=513, sampleRate=sample_rate, highFrequencyBound=8000)
         hpcp_alg = es.HPCP(sampleRate=sample_rate)
         peaks_alg = es.SpectralPeaks(sampleRate=sample_rate)
 
@@ -74,6 +77,7 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
             mag, phs = c2p(fft(w(frame)))
             det_func.append(od_hfc(mag, phs))
             
+            # Sub-sample spectral averages (~1s interval)
             if len(det_func) % 31 == 0:
                 m_f = mag.astype(np.float32)
                 centroids.append(es.Centroid()(m_f))
@@ -85,21 +89,23 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
                 hpcps.append(hpcp_alg(f, m))
 
         onset_times = es.Onsets()(essentia.array([det_func]), [1])
-        onset_count = len(onset_times)
         duration = len(audio) / sample_rate
 
-        # 2. Key, Loudness, Energy
-        key, scale, strength = es.KeyExtractor()(audio)
-        overall_loudness = es.Loudness()(audio)
-        rms_energy = np.sqrt(np.mean(audio**2))
-        dance_alg_val, _ = es.Danceability()(audio)
-
-        # 3. Parallel ML Preprocessing
+        # 4. Parallel ML Preprocessing
         ml_patches = None
         if not skip_models:
             ml_patches = model_inference.preprocess_audio(audio)
 
-        # 4. Partial Result
+        # 5. Pitch (Optional)
+        res_pitch = {"PitchMeanHz": 0.0, "PitchStdHz": 0.0}
+        if not skip_pitch:
+            try:
+                pitch_vals, pitch_conf = es.PredominantPitchMelodia(sampleRate=sample_rate)(audio)
+                valid = pitch_vals[pitch_conf > 0.3]
+                res_pitch["PitchMeanHz"] = float(np.mean(valid)) if len(valid) > 0 else 0.0
+                res_pitch["PitchStdHz"] = float(np.std(valid)) if len(valid) > 0 else 0.0
+            except: pass
+
         res = {
             "YouTubeID": metadata.get("id", "Unknown"),
             "Title": metadata.get("title", "Unknown"),
@@ -118,8 +124,8 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
             "RmsEnergy": float(rms_energy),
             "BeatConfidence": float(beats_confidence),
             "BeatCount": int(beat_count),
-            "OnsetRate": float(onset_count / duration) if duration > 0 else 0.0,
-            "OnsetCount": int(onset_count),
+            "OnsetRate": float(len(onset_times) / duration) if duration > 0 else 0.0,
+            "OnsetCount": int(len(onset_times)),
             "RawDanceability": float(dance_alg_val),
             "SpectralCentroidHz": float(np.mean(centroids)) if centroids else 0.0,
             "SpectralRolloffHz": float(np.mean(rolloffs)) if rolloffs else 0.0,
@@ -128,17 +134,7 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
             "AvgMFCC": np.mean(mfccs, axis=0) if mfccs else np.zeros(13),
             "AvgHPCP": np.mean(hpcps, axis=0) if hpcps else np.zeros(12),
         }
-        
-        # 5. Pitch (Optional)
-        res["PitchMeanHz"], res["PitchStdHz"] = 0.0, 0.0
-        if not skip_pitch:
-            try:
-                pitch_vals, pitch_conf = es.PredominantPitchMelodia(sampleRate=sample_rate)(audio)
-                valid = pitch_vals[pitch_conf > 0.3]
-                res["PitchMeanHz"] = float(np.mean(valid)) if len(valid) > 0 else 0.0
-                res["PitchStdHz"] = float(np.std(valid)) if len(valid) > 0 else 0.0
-            except: pass
-
+        res.update(res_pitch)
         return res, ml_patches
 
     except Exception as e:
