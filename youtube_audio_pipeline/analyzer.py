@@ -40,15 +40,14 @@ def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
 
 def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = False, skip_pitch: bool = False) -> tuple[dict, np.ndarray | None] | None:
     """
-    Stage 1: Optimized feature extraction at 16kHz.
+    Stage 1: Optimized feature extraction at 16kHz with fixed filter-banks.
     """
     try:
         sample_rate = 16000
         loader = es.MonoLoader(filename=str(filepath), sampleRate=sample_rate)
         audio = loader()
 
-        # 1. Rhythm & Beats (Standard algorithms usually assume 44.1k, 
-        # but 16k is sufficient for structural extraction)
+        # 1. Rhythm & Beats
         rhythm_extractor = es.RhythmExtractor2013(method="multifeature")
         bpm, beats, beats_confidence, _, _ = rhythm_extractor(audio)
         beat_count = len(beats)
@@ -60,9 +59,16 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
         
         det_func = []
         centroids, rolloffs, flatness, mfccs, hpcps = [], [], [], [], []
-        mfcc_alg = es.MFCC(numberCoefficients=13)
-        hpcp_alg = es.HPCP()
-        peaks_alg = es.SpectralPeaks()
+        
+        # MFCC configuration: Corrected parameter name highFrequencyBound
+        mfcc_alg = es.MFCC(
+            numberCoefficients=13, 
+            inputSize=513, 
+            sampleRate=sample_rate,
+            highFrequencyBound=8000 # Correct parameter name
+        )
+        hpcp_alg = es.HPCP(sampleRate=sample_rate)
+        peaks_alg = es.SpectralPeaks(sampleRate=sample_rate)
 
         for frame in es.FrameGenerator(audio, frameSize=1024, hopSize=512):
             mag, phs = c2p(fft(w(frame)))
