@@ -53,3 +53,8 @@ site/
 
 # AI Code Editors
 .omg
+# Pipeline Runtime Data
+data/processed/*.csv
+data/processed/*.json
+youtube_audio_pipeline/models/*.pb
+youtube_audio_pipeline/models/*.json

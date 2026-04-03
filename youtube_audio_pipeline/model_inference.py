@@ -1,8 +1,6 @@
 """
-Essentia TensorFlow Model Inference (High-Performance with Batching)
-
-Optimized for high-throughput with Singleton Session Management and 
-multi-track vectorized batching support.
+Essentia TensorFlow Model Inference (CPU-Native v3.0)
+Hardcoded for CPU stability to bypass NVIDIA driver issues.
 """
 
 from __future__ import annotations
@@ -10,8 +8,14 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import os
 from pathlib import Path
 from typing import Any
+
+# --- FORCE CPU MODE ---
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3" # Silence all TF logs
+# ----------------------
 
 import numpy as np
 import tensorflow as tf
@@ -26,6 +30,9 @@ _BACKBONE_SESS: tf.compat.v1.Session = None
 _HEAD_SESSIONS: dict[str, tuple[tf.compat.v1.Session, str, str, list[str]]] = {}
 _METADATA: dict[str, Any] = {}
 _models_initialized = False
+
+# Global address references
+_INP_B, _OUT_B, _PHELDS_B = "", "", []
 
 MODELS_DIR = Path(__file__).parent / "models"
 
@@ -70,36 +77,42 @@ def _find_tensors(graph: tf.Graph):
     return primary_input, primary_output, placeholders
 
 def _ensure_models_loaded() -> None:
-    global _PREPROCESSOR, _BACKBONE_SESS, _HEAD_SESSIONS, _METADATA, _models_initialized
+    global _PREPROCESSOR, _models_initialized
+    global _BACKBONE_SESS, _HEAD_SESSIONS, _METADATA
+    global _INP_B, _OUT_B, _PHELDS_B
 
     if _models_initialized: return
 
     with _models_lock:
         if _models_initialized: return
 
-        logger.info(f"Initializing High-Performance Inference Engine from {MODELS_DIR}")
+        logger.info(f"Initializing CPU-Native Inference Engine from {MODELS_DIR}")
         _PREPROCESSOR = es.TensorflowInputMusiCNN()
         
         for key, filename in MODEL_REGISTRY.items():
             path = MODELS_DIR / filename
-            if path.exists():
-                graph_def = _load_frozen_graph(path)
-                graph = tf.Graph()
-                with graph.as_default():
-                    tf.import_graph_def(graph_def, name="model")
-                    inp, out, phelds = _find_tensors(graph)
-                    sess = tf.compat.v1.Session(graph=graph)
-                    
-                    if key == "backbone":
-                        _BACKBONE_SESS = sess
-                    else:
-                        _HEAD_SESSIONS[key] = (sess, inp, out, phelds)
+            if not path.exists(): continue
+            
+            graph_def = _load_frozen_graph(path)
+            graph = tf.Graph()
+            with graph.as_default():
+                tf.import_graph_def(graph_def, name="model")
+                inp, out, phelds = _find_tensors(graph)
                 
-                meta_path = path.with_name(filename.replace(".pb", "_metadata.json"))
-                if meta_path.exists():
-                    with open(meta_path, "r") as f:
-                        _METADATA[key] = json.load(f)
-                logger.info(f"✓ {key} model initialized")
+                # Standard CPU Session (No GPU config needed)
+                sess = tf.compat.v1.Session(graph=graph)
+                
+                if key == "backbone":
+                    _BACKBONE_SESS = sess
+                    _INP_B, _OUT_B, _PHELDS_B = inp, out, phelds
+                else:
+                    _HEAD_SESSIONS[key] = (sess, inp, out, phelds)
+            
+            meta_path = path.with_name(filename.replace(".pb", "_metadata.json"))
+            if meta_path.exists():
+                with open(meta_path, "r") as f:
+                    _METADATA[key] = json.load(f)
+            logger.info(f"✓ {key} model initialized")
 
         _models_initialized = True
 
@@ -130,25 +143,15 @@ def preprocess_audio(audio_16k: np.ndarray) -> np.ndarray:
         patches = [np.pad(mel_data, ((0, patch_size - len(mel_data)), (0, 0)), mode='constant')]
     return np.array(patches)
 
-def run_full_inference(audio_16k: np.ndarray) -> dict[str, Any]:
-    """Single-track high-performance inference."""
-    patches = preprocess_audio(audio_16k)
-    if patches.size == 0: return {k: {} for k in MODEL_REGISTRY if k != "backbone"}
-    
-    # Wrap patches into a list format for batch runner
-    batch_results = run_batch_inference([patches])
-    return batch_results[0]
-
 def run_batch_inference(list_of_patches: list[np.ndarray]) -> list[dict[str, Any]]:
     """
-    Vectorized batch inference across multiple tracks.
-    Efficiently packs patches from all tracks into batches of 64.
+    Vectorized batch inference with 64-patch chunking for fixed-size models.
     """
     _ensure_models_loaded()
     if not list_of_patches: return []
     if _BACKBONE_SESS is None: return [{k: {} for k in MODEL_REGISTRY if k != "backbone"} for _ in list_of_patches]
 
-    # 1. Flatten all patches into one big list and keep track of indices
+    # 1. Flatten all patches into one big list
     all_patches = []
     track_patch_ranges = []
     current_idx = 0
@@ -158,21 +161,24 @@ def run_batch_inference(list_of_patches: list[np.ndarray]) -> list[dict[str, Any
         track_patch_ranges.append((current_idx, current_idx + count))
         current_idx += count
 
-    # 2. Backbone Inference (Batch Size 64)
-    batch_size = 64
+    # 2. Backbone Inference (CHUNKED into 64 for fixed-model compatibility)
+    CHUNK_SIZE = 64
+    all_patches_np = np.array(all_patches)
+    total_to_process = len(all_patches_np)
     all_embs = []
-    inp_b, out_b, phelds_b = _find_tensors(_BACKBONE_SESS.graph)
     
-    for i in range(0, len(all_patches), batch_size):
-        batch = all_patches[i:i+batch_size]
-        actual_len = len(batch)
-        if actual_len < batch_size:
-            # Pad batch with copies of the last patch
-            batch = list(batch) # ensure list
-            for _ in range(batch_size - actual_len): batch.append(batch[-1])
+    for i in range(0, total_to_process, CHUNK_SIZE):
+        chunk = all_patches_np[i : i + CHUNK_SIZE]
+        actual_len = len(chunk)
         
-        embs = _run_sess(_BACKBONE_SESS, inp_b, out_b, phelds_b, np.array(batch))
-        all_embs.append(embs[:actual_len])
+        # PADDING: If chunk < 64, pad with zeros to satisfy the model
+        if actual_len < CHUNK_SIZE:
+            padding = np.zeros((CHUNK_SIZE - actual_len, 128, 96), dtype=np.float32)
+            chunk = np.vstack([chunk, padding])
+        
+        chunk_embs = _run_sess(_BACKBONE_SESS, _INP_B, _OUT_B, _PHELDS_B, chunk)
+        # Store only the real results (discard padding)
+        all_embs.append(chunk_embs[:actual_len])
     
     combined_embs = np.concatenate(all_embs, axis=0)
 
@@ -184,8 +190,8 @@ def run_batch_inference(list_of_patches: list[np.ndarray]) -> list[dict[str, Any
         
         res: dict[str, Any] = {"embedding": track_embedding.flatten()}
         
-        # Heads Inference (one track at a time for now, as heads are extremely fast)
         for key, (sess, inp, out, phelds) in _HEAD_SESSIONS.items():
+            # Heads are flexible, we can run them on the single track embedding
             logits = _run_sess(sess, inp, out, phelds, track_embedding)
             probs = logits.flatten()
             labels = _METADATA.get(key, {}).get("classes", [])

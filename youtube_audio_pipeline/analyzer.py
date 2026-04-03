@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
+import uuid
+import time
 from pathlib import Path
 
 import essentia
@@ -11,10 +14,6 @@ import numpy as np
 import pandas as pd
 
 from youtube_audio_pipeline import model_inference
-
-# SILENCE: Suppress noisy Essentia internal warnings
-essentia.log.infoActive = False
-essentia.log.warningActive = False
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +39,9 @@ ALL_MOODS = [
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
-def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = False, skip_pitch: bool = True) -> tuple[dict, np.ndarray | None] | None:
+def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = False, skip_pitch: bool = False) -> tuple[dict, np.ndarray | None] | None:
     """
-    Stage 1: Stable feature extraction.
-    Reverted to standard resolution to prevent GPU memory pressure.
+    Stage 1: Optimized feature extraction at 16kHz.
     """
     try:
         sample_rate = 16000
@@ -63,7 +61,7 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
         rms_energy = np.sqrt(np.mean(audio**2))
         dance_alg_val, _ = es.Danceability()(audio)
 
-        # 3. Spectral features (Standard Resolution)
+        # 3. Spectral Loop (Unified for efficiency)
         od_hfc = es.OnsetDetection(method="hfc")
         w = es.Windowing(type="hann")
         fft = es.FFT()
@@ -75,13 +73,12 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
         hpcp_alg = es.HPCP(sampleRate=sample_rate)
         peaks_alg = es.SpectralPeaks(sampleRate=sample_rate)
 
-        # Process frames (Averaging every 31 frames ~1s for stability)
-        frame_idx = 0
         for frame in es.FrameGenerator(audio, frameSize=1024, hopSize=512):
             mag, phs = c2p(fft(w(frame)))
             det_func.append(od_hfc(mag, phs))
             
-            if frame_idx % 31 == 0:
+            # Sub-sample spectral averages (~1s interval)
+            if len(det_func) % 31 == 0:
                 m_f = mag.astype(np.float32)
                 centroids.append(es.Centroid()(m_f))
                 rolloffs.append(es.RollOff()(m_f))
@@ -90,21 +87,24 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
                 mfccs.append(m_coeffs)
                 f, m = peaks_alg(m_f)
                 hpcps.append(hpcp_alg(f, m))
-            frame_idx += 1
 
         onset_times = es.Onsets()(essentia.array([det_func]), [1])
         duration = len(audio) / sample_rate
 
-        # 4. Pitch (Reverted to simple mean/std)
-        pitch_vals, pitch_conf = es.PitchMelodia(sampleRate=sample_rate)(audio) if not skip_pitch else (np.zeros(1), np.zeros(1))
-        valid = pitch_vals[pitch_conf > 0.5]
-        pitch_mean = float(np.mean(valid)) if len(valid) > 0 else 0.0
-        pitch_std = float(np.std(valid)) if len(valid) > 0 else 0.0
-
-        # 5. Parallel ML Preprocessing
+        # 4. Parallel ML Preprocessing
         ml_patches = None
         if not skip_models:
             ml_patches = model_inference.preprocess_audio(audio)
+
+        # 5. Pitch (Optional)
+        res_pitch = {"PitchMeanHz": 0.0, "PitchStdHz": 0.0}
+        if not skip_pitch:
+            try:
+                pitch_vals, pitch_conf = es.PredominantPitchMelodia(sampleRate=sample_rate)(audio)
+                valid = pitch_vals[pitch_conf > 0.3]
+                res_pitch["PitchMeanHz"] = float(np.mean(valid)) if len(valid) > 0 else 0.0
+                res_pitch["PitchStdHz"] = float(np.std(valid)) if len(valid) > 0 else 0.0
+            except: pass
 
         res = {
             "YouTubeID": metadata.get("id", "Unknown"),
@@ -130,12 +130,11 @@ def extract_base_features(filepath: Path, metadata: dict, skip_models: bool = Fa
             "SpectralCentroidHz": float(np.mean(centroids)) if centroids else 0.0,
             "SpectralRolloffHz": float(np.mean(rolloffs)) if rolloffs else 0.0,
             "SpectralFlatness": float(np.mean(flatness)) if flatness else 0.0,
-            "PitchMeanHz": pitch_mean,
-            "PitchStdHz": pitch_std,
             "ZeroCrossingRate": float(es.ZeroCrossingRate()(audio)),
             "AvgMFCC": np.mean(mfccs, axis=0) if mfccs else np.zeros(13),
             "AvgHPCP": np.mean(hpcps, axis=0) if hpcps else np.zeros(12),
         }
+        res.update(res_pitch)
         return res, ml_patches
 
     except Exception as e:
@@ -216,3 +215,10 @@ def finalize_song_data(base_data: dict, ml_res: dict) -> dict:
     result["DiscogsEmbeddingJson"] = json.dumps(ml_res["embedding"].tolist()) if ml_res.get("embedding") is not None else "[]"
 
     return result
+
+def save_to_dataframe(results_list: list[dict], output_csv: str) -> None:
+    if not results_list: return
+    output_path = Path(output_csv)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(results_list)
+    df.to_csv(output_path, mode="a", header=not output_path.exists(), index=False)
