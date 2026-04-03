@@ -50,6 +50,40 @@ Called once at startup. Loads all models into memory and verifies sessions.
 - Logs "✓ [model] model initialized" to console.
 - **FORCES CPU**: Automatically sets `CUDA_VISIBLE_DEVICES="-1"` to prevent GPU crashes.
 
+## Manual Download Guide
+
+If you are not using the `download_models.py` script, you can fetch the models manually into `youtube_audio_pipeline/models/`:
+
+```bash
+# 1. Backbone (Feature Extractor)
+wget https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.pb -O discogs-effnet-1.pb
+wget https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.json -O discogs-effnet-1_metadata.json
+
+# 2. Genre (Discogs 400)
+wget https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb
+wget https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json -O genre_discogs400-discogs-effnet-1_metadata.json
+
+# 3. Mood/Theme (MTG-Jamendo)
+wget https://essentia.upf.edu/models/classification-heads/mtg_jamendo_moodtheme/mtg_jamendo_moodtheme-discogs-effnet-1.pb
+wget https://essentia.upf.edu/models/classification-heads/mtg_jamendo_moodtheme/mtg_jamendo_moodtheme-discogs-effnet-1.json -O mtg_jamendo_moodtheme-discogs-effnet-1_metadata.json
+
+# 4. Instrumentation
+wget https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.pb
+wget https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.json -O mtg_jamendo_instrument-discogs-effnet-1_metadata.json
+
+# 5. Voice/Instrumental
+wget https://essentia.upf.edu/models/classification-heads/voice_instrumental/voice_instrumental-discogs-effnet-1.pb
+wget https://essentia.upf.edu/models/classification-heads/voice_instrumental/voice_instrumental-discogs-effnet-1.json -O voice_instrumental-discogs-effnet-1_metadata.json
+
+# 6. Gender
+wget https://essentia.upf.edu/models/classification-heads/gender/gender-discogs-effnet-1.pb -O voice_gender-discogs-effnet-1.pb
+wget https://essentia.upf.edu/models/classification-heads/gender/gender-discogs-effnet-1.json -O voice_gender-discogs-effnet-1_metadata.json
+
+# 7. Timbre
+wget https://essentia.upf.edu/models/classification-heads/timbre/timbre-discogs-effnet-1.pb
+wget https://essentia.upf.edu/models/classification-heads/timbre/timbre-discogs-effnet-1.json -O timbre-discogs-effnet-1_metadata.json
+```
+
 ## Performance (CPU Mode)
 
 ### Per-Song Inference
