@@ -7,8 +7,6 @@ from pathlib import Path
 
 import yt_dlp
 
-from youtube_audio_pipeline.youtube_utils import canonical_watch_url
-
 logger = logging.getLogger(__name__)
 
 def ensure_ram_path(ram_disk_path: str = "/dev/shm/yt_audio") -> Path:
@@ -27,7 +25,7 @@ def download_to_ram(
     ram_disk_path: str = "/dev/shm/yt_audio",
 ) -> tuple[bool, str | None, dict | None]:
     """
-    Downloads audio and resamples to 16kHz for high-performance analysis.
+    Standard Downloader (No aria2c) - Mono 16kHz WAV.
     """
     ram_path = ensure_ram_path(ram_disk_path)
 
@@ -38,16 +36,15 @@ def download_to_ram(
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "external_downloader": "aria2c",
-        "external_downloader_args": ["-x", "16", "-s", "16", "-k", "1M"],
+        # REMOVED ARIA2C for stealth
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "wav",
             "preferredquality": "192",
         }],
         "postprocessor_args": [
-            "-ar", "16000",  # Set sample rate to 16kHz
-            "-ac", "1"       # Convert to mono
+            "-ar", "16000",
+            "-ac", "1"
         ],
     }
 

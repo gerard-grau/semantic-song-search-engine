@@ -6,7 +6,8 @@ import os
 import time
 import queue
 import threading
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from youtube_audio_pipeline.analyzer import extract_base_features, finalize_song_data, save_to_dataframe
@@ -19,6 +20,24 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+STATE_FILE = "data/processed/pipeline_state.json"
+
+def load_processed_ids() -> set[str]:
+    if not os.path.exists(STATE_FILE): return set()
+    try:
+        with open(STATE_FILE, "r") as f:
+            data = json.load(f)
+            return set(data.get("processed_ids", []))
+    except: return set()
+
+def save_processed_id(video_id: str):
+    processed = list(load_processed_ids())
+    if video_id not in processed:
+        processed.append(video_id)
+        Path(STATE_FILE).parent.mkdir(parents=True, exist_ok=True)
+        with open(STATE_FILE, "w") as f:
+            json.dump({"processed_ids": processed}, f)
 
 def load_urls(urls_file: str) -> list[dict[str, str | None]]:
     urls = []
@@ -44,31 +63,38 @@ def run_turbo_pipeline(
     urls: list[dict[str, str | None]],
     output_csv: str,
     ram_disk_path: str = "/dev/shm/yt_audio",
-    num_downloaders: int = 4, # Parallel downloads
-    num_analyzers: int = 6,   # CPU cores
+    num_downloaders: int = 1,
+    num_analyzers: int = 1,
     ml_batch_size: int = 16,
-    skip_models: bool = False,
-    skip_pitch: bool = False,
 ) -> tuple[int, int]:
     if not urls: return 0, 0
+    
+    # RESUME LOGIC
+    processed_ids = load_processed_ids()
+    to_process_urls = [u for u in urls if u['youtube_id'] not in processed_ids]
+    
     total_count = len(urls)
+    already_done = total_count - len(to_process_urls)
     start_time = time.time()
     
-    # Queues
-    # Use maxsize to prevent downloading too many songs and filling RAM
-    inference_queue = queue.Queue(maxsize=ml_batch_size * 2)
-    processed_count = 0
+    print(f"🕵️ Stealth Baseline Active (v2.3)")
+    print(f"📊 Progress: {already_done}/{total_count} already processed.")
     
-    # 1. Parallel Downloaders (ThreadPool is fine here as it's I/O bound)
+    if not to_process_urls:
+        print("✅ All songs are already processed!")
+        return already_done, already_done
+
+    inference_queue = queue.Queue(maxsize=ml_batch_size * 2)
+    processed_count = already_done
+    
     def download_task(url_entry):
         return download_to_ram(url_entry['url'], ram_disk_path), url_entry['source_input']
 
-    # 2. Inference Manager (Consumes from the analyzer results)
     def inference_manager(total_to_process):
         nonlocal processed_count
         pending_batch = []
-        received = 0
-        while received < total_to_process:
+        received = already_done
+        while received < total_count:
             item = inference_queue.get()
             received += 1
             if item is None: continue
@@ -85,46 +111,34 @@ def run_turbo_pipeline(
 
     def _run_batch(batch):
         list_of_patches = [item[1] for item in batch]
-        if not skip_models:
-            ml_batch_results = model_inference.run_batch_inference(list_of_patches)
-        else:
-            ml_batch_results = [{"embedding": None} for _ in batch]
+        ml_batch_results = model_inference.run_batch_inference(list_of_patches)
         
         completed_rows = []
         for i, (base_data, _) in enumerate(batch):
             final_row = finalize_song_data(base_data, ml_batch_results[i])
             completed_rows.append(final_row)
+            save_processed_id(base_data['YouTubeID'])
             
             idx = processed_count + i + 1
             elapsed = time.time() - start_time
-            avg = elapsed / idx
+            avg = elapsed / (idx - already_done)
             eta = avg * (total_count - idx)
-            print(f"[{idx}/{total_count}] ✅ Processed: {final_row['Title']} | ETA: {format_duration(eta)}")
+            print(f"[{idx}/{total_count}] [{time.strftime('%H:%M:%S')}] ✅ Processed: {final_row['Title']} | ETA: {format_duration(eta)}")
         
         save_to_dataframe(completed_rows, output_csv)
 
-    # 3. Master Execution Flow
-    # We use a ThreadPool for downloads and a ProcessPool for analysis
-    # NOTE: Essentia objects cannot be easily pickled for ProcessPool, 
-    # so we keep analysis in threads but SCALE the downloaders.
-    
-    print(f"🚀 Launching Turbo Pipeline: {num_downloaders} Downloaders | {num_analyzers} Analyzers")
-    
     with ThreadPoolExecutor(max_workers=num_downloaders + num_analyzers) as executor:
-        # Start Inference Manager in background
         inf_thread = threading.Thread(target=inference_manager, args=(total_count,))
         inf_thread.start()
         
-        # Helper to analyze and push to queue
         def analyze_and_queue(download_res, source_input):
             success, filepath, metadata = download_res
             if not success or not filepath:
                 inference_queue.put(None)
                 return
             
-            filepath_obj = Path(filepath)
-            res = extract_base_features(filepath_obj, metadata, skip_models, skip_pitch)
-            if filepath_obj.exists(): filepath_obj.unlink()
+            res = extract_base_features(Path(filepath), metadata)
+            if Path(filepath).exists(): Path(filepath).unlink()
             
             if res:
                 base_data, ml_patches = res
@@ -133,36 +147,29 @@ def run_turbo_pipeline(
             else:
                 inference_queue.put(None)
 
-        # Download Queue
         download_futures = []
-        for url_entry in urls:
+        for url_entry in to_process_urls:
             f = executor.submit(download_task, url_entry)
             download_futures.append(f)
             
-        # As downloads finish, submit to analyzer pool
-        analysis_futures = []
         for f in as_completed(download_futures):
             download_res, source_input = f.result()
-            # Submit to analyzer part of the pool
-            af = executor.submit(analyze_and_queue, download_res, source_input)
-            analysis_futures.append(af)
+            executor.submit(analyze_and_queue, download_res, source_input)
             
         inf_thread.join()
 
     total_time = time.time() - start_time
-    print(f"\nTurbo Pipeline finished in {format_duration(total_time)}.")
+    print(f"\nPipeline finished in {format_duration(total_time)}.")
     return processed_count, processed_count
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="YouTube Audio Pipeline Production v1.2.0")
+    parser = argparse.ArgumentParser(description="YouTube Audio Pipeline Stealth Baseline")
     parser.add_argument("--urls-file", type=str, default="youtube_audio_pipeline/urls.example.txt")
     parser.add_argument("--url", action="append")
     parser.add_argument("--output-csv", type=str, default="data/processed/youtube_song_characteristics.csv")
-    parser.add_argument("--workers", type=int, default=6)
-    parser.add_argument("--downloaders", type=int, default=4)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--skip-models", action="store_true")
-    parser.add_argument("--skip-pitch", action="store_true")
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--downloaders", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=8)
     args = parser.parse_args()
 
     urls = []
@@ -174,7 +181,7 @@ def main() -> None:
         urls.extend(load_urls(args.urls_file))
 
     if not urls: return
-    if not args.skip_models: model_inference.initialize_models_globally()
+    model_inference.initialize_models_globally()
 
     run_turbo_pipeline(
         urls, 
@@ -182,8 +189,6 @@ def main() -> None:
         num_downloaders=args.downloaders,
         num_analyzers=args.workers, 
         ml_batch_size=args.batch_size, 
-        skip_models=args.skip_models,
-        skip_pitch=args.skip_pitch
     )
 
 if __name__ == "__main__":
