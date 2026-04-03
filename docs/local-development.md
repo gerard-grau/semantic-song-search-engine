@@ -15,7 +15,7 @@ The frontend layout can be shown with backend data or fallback mock data.
 
 - Python 3.11+
 - Optional virtual environment (`.venv`)
-- `aria2` and `ffmpeg` only for [../youtube_audio_pipeline](../youtube_audio_pipeline)
+- `ffmpeg` only for [../youtube_audio_pipeline](../youtube_audio_pipeline)
 
 ## Setup
 

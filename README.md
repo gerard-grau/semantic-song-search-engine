@@ -70,7 +70,7 @@ youtube_audio_pipeline/
 
 - Python 3.11+
 - Optional virtual environment (`.venv`)
-- `aria2` and `ffmpeg` only if you will run `youtube_audio_pipeline`
+- `ffmpeg` only if you will run `youtube_audio_pipeline`
 
 ### 1) Setup Python environment
 
