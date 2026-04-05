@@ -1,6 +1,0 @@
-# Python cache
-__pycache__/
-*.py[cod]
-
-# Local temp/debug output
-*.log
