@@ -5,8 +5,11 @@ export default function SearchBar({ onSearch, onReset, isLoading }) {
 
   function handleSubmit(e) {
     e.preventDefault()
-    const trimmed = query.trim()
-    if (trimmed) onSearch(trimmed)
+    const q = query.trim()
+    if (q) {
+      onSearch(q)
+      setQuery('')
+    }
   }
 
   function handleReset() {
@@ -19,14 +22,14 @@ export default function SearchBar({ onSearch, onReset, isLoading }) {
       <input
         type="text"
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Escriu una cerca (ex: cançons tristes en català)..."
+        onChange={e => setQuery(e.target.value)}
+        placeholder="Escriu una cerca (ex: cançons tristes, amor, rock català)..."
         disabled={isLoading}
       />
-      <button type="submit" disabled={isLoading || !query.trim()}>
-        Cercar
+      <button type="submit" className="btn-search" disabled={isLoading || !query.trim()}>
+        {isLoading ? 'Cercant...' : 'Cercar'}
       </button>
-      <button type="button" onClick={handleReset} disabled={isLoading} className="btn-reset">
+      <button type="button" className="btn-reset" onClick={handleReset} disabled={isLoading}>
         Reset
       </button>
     </form>
