@@ -1,17 +1,62 @@
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; width: 100%; }
+body {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-html, body, #root {
-  height: 100%;
-  width: 100%;
+/* ── Light theme (Viasona-inspired warm palette) ── */
+:root, [data-theme="light"] {
+  --bg-primary: #FAF8F5;
+  --bg-secondary: #F5F0EB;
+  --bg-card: #FFFFFF;
+  --bg-header: #FFFFFF;
+  --text-primary: #2C3E50;
+  --text-secondary: #5D6D7E;
+  --text-muted: #95A5A6;
+  --accent: #D35400;
+  --accent-hover: #E67E22;
+  --accent-light: #FDF2E9;
+  --accent-subtle: rgba(211, 84, 0, 0.08);
+  --border: #E8E3DE;
+  --shadow: 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,0.1);
+  --viz-bg: #F0EBE5;
+  --tooltip-bg: rgba(44,62,80,0.92);
+  --tooltip-text: #fff;
+  --card-hover: #FDF8F4;
+  --reset-bg: #ECEFF1;
+  --reset-hover: #CFD8DC;
+  color-scheme: light;
+}
+
+/* ── Dark theme (teal-cyan accent) ── */
+[data-theme="dark"] {
+  --bg-primary: #0F1419;
+  --bg-secondary: #161D24;
+  --bg-card: #1C252E;
+  --bg-header: #131A21;
+  --text-primary: #E8ECF0;
+  --text-secondary: #8B9DAF;
+  --text-muted: #506070;
+  --accent: #22B8CF;
+  --accent-hover: #3DD8EC;
+  --accent-light: #0F2A30;
+  --accent-subtle: rgba(34, 184, 207, 0.1);
+  --border: #243040;
+  --shadow: 0 2px 8px rgba(0,0,0,0.25);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,0.45);
+  --viz-bg: #0B1015;
+  --tooltip-bg: rgba(0,0,0,0.92);
+  --tooltip-text: #fff;
+  --card-hover: #1F3040;
+  --reset-bg: #243040;
+  --reset-hover: #304050;
+  color-scheme: dark;
 }
 
 body {
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  background: #0f0f13;
-  color: #e0e0e0;
-  line-height: 1.5;
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
