@@ -2,7 +2,7 @@
 
 A prototype search experience built for **Viasona**, a Catalan music platform. The goal is to let users find songs by meaning — not just keywords — while also exposing traditional search results and a visual map of the song catalogue side by side.
 
-gaming
+
 ---
 
 ## What this project does
