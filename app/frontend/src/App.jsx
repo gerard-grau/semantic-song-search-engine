@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import useTheme from './hooks/useTheme'
 import WelcomePage from './components/WelcomePage'
 import ThemeToggle from './components/ThemeToggle'
@@ -10,7 +10,7 @@ import VizSelector from './components/VizSelector'
 import Scatter2D from './components/visualizations/Scatter2D'
 import Scatter3D from './components/visualizations/Scatter3D'
 import Navigation2D from './components/visualizations/Navigation2D'
-import { fetchAllSongs, filterSongs } from './api/client'
+import { fetchAllSongs, filterSongs, fetchNeighbors } from './api/client'
 import './App.css'
 
 export default function App() {
@@ -35,7 +35,14 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  const isShowcase = songs.length <= 5 && query !== ''
+  // Neighborhood exploration state
+  const [isExploring, setIsExploring] = useState(false)
+  const [focalId, setFocalId] = useState(null)
+  const [exploredSongTitle, setExploredSongTitle] = useState(null)
+  // Saved view to restore when pressing "back"
+  const savedStateRef = useRef(null)
+
+  const isShowcase = songs.length <= 5 && query !== '' && !isExploring
   const topIds = songs.slice(0, 10).map(s => s.id)
 
   // ── Load all songs (initial + reset) ──
@@ -51,6 +58,10 @@ export default function App() {
       setProj3d(data.projections_3d)
       setQuery('')
       setMessage(null)
+      setIsExploring(false)
+      setFocalId(null)
+      setExploredSongTitle(null)
+      savedStateRef.current = null
     } catch (err) {
       setError("No s'ha pogut connectar amb el servidor.")
       console.error(err)
@@ -69,6 +80,11 @@ export default function App() {
   async function handleSearch(q) {
     setIsLoading(true)
     setError(null)
+    // Searching exits exploration mode
+    setIsExploring(false)
+    setFocalId(null)
+    setExploredSongTitle(null)
+    savedStateRef.current = null
     try {
       const data = await filterSongs(q, songIds)
       setSongs(data.songs)
@@ -90,12 +106,75 @@ export default function App() {
     loadAll()
   }
 
-  // ── Render ──
-  if (page === 'welcome') {
-    return <WelcomePage onEnter={handleEnter} theme={theme} onToggleTheme={toggleTheme} />
+  // ── Explore neighborhood of a song (2D scatter click) ──
+  async function handleExplore(songId) {
+    setIsLoading(true)
+    setError(null)
+    setMessage(null)
+
+    // Save current state only on the first exploration step (not when traveling deeper)
+    if (!isExploring) {
+      savedStateRef.current = { songs, proj2d, songIds, query }
+    }
+
+    // Find title for display; search both current songs and full catalog
+    const song = songs.find(s => s.id === songId) ?? allSongs.find(s => s.id === songId)
+    setExploredSongTitle(song?.title ?? null)
+    setFocalId(songId)
+    setIsExploring(true)
+
+    try {
+      const data = await fetchNeighbors(songId, {
+        // The current focal becomes "previous" in the next step
+        previousSongId: isExploring ? focalId : null,
+        // All current neighborhood IDs are offered as bridge candidates
+        bridgeSongIds: songs.map(s => s.id),
+        bridgeCount: 5,
+        // Current projection positions → used for Procrustes alignment
+        previousPositions: proj2d.map(p => ({ id: p.id, x: p.x, y: p.y })),
+      })
+      setSongs(data.songs)
+      setSongIds(data.songs.map(s => s.id))
+      setProj2d(data.projections_2d)
+    } catch (err) {
+      setError('Error carregant veïns.')
+      console.error(err)
+    } finally {
+      setIsLoading(false)
+    }
   }
 
-  const vizProps = {
+  // ── Back from exploration to previous view ──
+  function handleBack() {
+    const saved = savedStateRef.current
+    if (saved) {
+      setSongs(saved.songs)
+      setProj2d(saved.proj2d)
+      setSongIds(saved.songIds)
+      setQuery(saved.query)
+    }
+    setIsExploring(false)
+    setFocalId(null)
+    setExploredSongTitle(null)
+    savedStateRef.current = null
+  }
+
+  // ── Render ──
+  if (page === 'welcome') {
+    return <WelcomePage onEnter={handleEnter} theme={theme} onToggleTheme={toggleTheme} isLoading={isLoading} />
+  }
+
+  const vizProps2D = {
+    highlightedId,
+    onPointHover: setHighlightedId,
+    onPointClick: handleExplore,
+    topIds,
+    faded: false,
+    scores: songs,
+    centerOnId: focalId,
+  }
+
+  const vizPropsOther = {
     highlightedId,
     onPointHover: setHighlightedId,
     onPointClick: setSelectedSongId,
@@ -135,18 +214,33 @@ export default function App() {
           <div className="viz-bar viz-bar--controls">
             <VizSelector mode={vizMode} onChange={setVizMode} />
             <span className="viz-count">
-              {query ? `${songs.length} cançons supervivents` : `${songs.length} cançons`}
+              {isExploring
+                ? `${songs.length} cançons similars`
+                : query
+                  ? `${songs.length} cançons supervivents`
+                  : `${songs.length} cançons`}
             </span>
           </div>
+
+          {/* Exploration breadcrumb bar */}
+          {isExploring && (
+            <div className="viz-bar viz-bar--explore">
+              <button className="explore-back-btn" onClick={handleBack}>← Enrere</button>
+              <span className="explore-label">
+                Veïns de: <strong>{exploredSongTitle}</strong>
+              </span>
+              <span className="explore-hint">Clica una cançó per explorar-ne els veïns</span>
+            </div>
+          )}
 
           <div className="viz-area">
             {isShowcase ? (
               <SongShowcase songs={songs} onSongClick={setSelectedSongId} />
             ) : (
               <>
-                {vizMode === '2D' && <Scatter2D points={proj2d} {...vizProps} />}
-                {vizMode === '3D' && <Scatter3D points={proj3d} {...vizProps} />}
-                {vizMode === 'nav' && <Navigation2D points={proj2d} {...vizProps} />}
+                {vizMode === '2D' && <Scatter2D points={proj2d} {...vizProps2D} />}
+                {vizMode === '3D' && <Scatter3D points={proj3d} {...vizPropsOther} />}
+                {vizMode === 'nav' && <Navigation2D points={proj2d} {...vizPropsOther} />}
               </>
             )}
           </div>

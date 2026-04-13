@@ -8,14 +8,17 @@ from app.backend.api.schemas import (
     AllSongsResponse,
     FilterRequest,
     FilterResponse,
+    NeighborsRequest,
+    NeighborsResponse,
     Point2D,
     Point3D,
     SongDetail,
     SongResult,
 )
 from app.backend.core.data_loader import get_song_by_id, get_songs_by_ids, load_all_songs
-from app.backend.core.embeddings import filter_embeddings
+from app.backend.core.embeddings import build_neighborhood, filter_embeddings
 from app.backend.core.projections import (
+    compute_neighborhood_2d,
     compute_tsne_2d,
     compute_tsne_3d,
     get_all_projections_2d,
@@ -91,6 +94,57 @@ def filter_songs(body: FilterRequest):
         projections_3d=[Point3D(**p) for p in proj_3d],
         total_remaining=n,
         message=message,
+    )
+
+
+# ------------------------------------------------------------------
+# POST /api/neighbors  –  neighborhood exploration
+# ------------------------------------------------------------------
+@router.post("/neighbors", response_model=NeighborsResponse)
+def get_song_neighbors(body: NeighborsRequest):
+    """
+    Return the neighborhood of a focal song for graph-style exploration.
+
+    - Finds N nearest neighbors by cosine similarity.
+    - Always includes the previous focal song (role="previous").
+    - Injects the most similar bridge songs from the previous neighborhood
+      (role="bridge") to anchor the layout and provide visual continuity.
+    - Projects with metric MDS on cosine distances; focal is always centred.
+    - Rotates the plane so the previous focal appears in the travel direction.
+    """
+    all_songs = (
+        get_songs_by_ids(body.song_ids)
+        if body.song_ids is not None
+        else load_all_songs()
+    )
+    neighborhood = build_neighborhood(
+        focal_id=body.song_id,
+        all_songs=all_songs,
+        n=body.n,
+        previous_song_id=body.previous_song_id,
+        bridge_song_ids=body.bridge_song_ids or [],
+        bridge_count=body.bridge_count,
+    )
+    if not neighborhood:
+        raise HTTPException(status_code=404, detail=f"Song {body.song_id} not found")
+
+    # Build previous-position lookup for angle-preserving rotation
+    prev_pos: dict[int, tuple[float, float]] | None = None
+    if body.previous_positions:
+        prev_pos = {p.id: (p.x, p.y) for p in body.previous_positions}
+
+    proj_2d = compute_neighborhood_2d(
+        neighborhood,
+        focal_id=body.song_id,
+        previous_song_id=body.previous_song_id,
+        previous_positions=prev_pos,
+    )
+    return NeighborsResponse(
+        songs=[_to_result(s) for s in neighborhood],
+        projections_2d=[Point2D(**p) for p in proj_2d],
+        focal_id=body.song_id,
+        previous_focal_id=body.previous_song_id,
+        total=len(neighborhood),
     )
 
 

@@ -37,6 +37,7 @@ class Point2D(BaseModel):
     title: str
     artist: str
     genre: str
+    role: str = "neighbor"  # "focal" | "neighbor" | "previous" | "bridge"
 
 
 class Point3D(BaseModel):
@@ -67,3 +68,27 @@ class FilterResponse(BaseModel):
     projections_3d: list[Point3D]
     total_remaining: int
     message: str | None = None
+
+
+class PreviousPosition(BaseModel):
+    id: int
+    x: float
+    y: float
+
+
+class NeighborsRequest(BaseModel):
+    song_id: int
+    n: int = 20
+    song_ids: list[int] | None = None   # restrict neighbors to this filtered set
+    previous_song_id: int | None = None
+    bridge_song_ids: list[int] = []
+    bridge_count: int = 5
+    previous_positions: list[PreviousPosition] = []
+
+
+class NeighborsResponse(BaseModel):
+    songs: list[SongResult]
+    projections_2d: list[Point2D]
+    focal_id: int
+    previous_focal_id: int | None = None
+    total: int
