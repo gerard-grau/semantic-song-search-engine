@@ -72,7 +72,7 @@ def save_row_to_csv(row: dict, output_csv: str):
         if not file_exists: writer.writeheader()
         writer.writerow(row)
 
-def run_turbo_pipeline(
+def run_standard_pipeline(
     urls: list[dict[str, str | None]],
     output_csv: str,
     ram_disk_path: str = "/dev/shm/yt_audio",
@@ -84,7 +84,6 @@ def run_turbo_pipeline(
 ) -> tuple[int, int]:
     if not urls: return 0, 0
     
-    # RESUME LOGIC
     processed_ids = load_processed_ids()
     to_process_urls = [u for u in urls if u['youtube_id'] not in processed_ids]
     
@@ -92,7 +91,7 @@ def run_turbo_pipeline(
     already_done = total_count - len(to_process_urls)
     start_time = time.time()
     
-    print(f"🕵️ Stealth Baseline Active (v3.0 CPU-Native)")
+    print(f"🚀 Starting Standard Pipeline (v3.1)")
     print(f"📊 Progress: {already_done}/{total_count} already finished.")
     
     if not to_process_urls:
@@ -103,7 +102,7 @@ def run_turbo_pipeline(
     processed_count = already_done
     
     def download_task(url_entry):
-        return download_to_ram(url_entry['url'], ram_disk_path), url_entry['source_input']
+        return download_to_ram(url_entry['url'], ram_disk_path), url_entry['source_input'], url_entry['youtube_id']
 
     def inference_manager(total_to_process):
         nonlocal processed_count
@@ -133,12 +132,12 @@ def run_turbo_pipeline(
             ml_batch_results = [{"embedding": None} for _ in batch]
         
         completed_rows = []
-        for i, (base_data, _) in enumerate(batch):
+        for i, (base_data, _, vid_id) in enumerate(batch):
             final_row = finalize_song_data(base_data, ml_batch_results[i])
             completed_rows.append(final_row)
-            save_processed_id(base_data['YouTubeID'])
+            save_processed_id(vid_id)
             
-            idx = processed_count + i + 1
+            idx = (processed_count - already_done) + already_done + i + 1
             elapsed = time.time() - start_time
             avg = elapsed / (idx - already_done)
             eta = avg * (total_count - idx)
@@ -150,7 +149,7 @@ def run_turbo_pipeline(
         inf_thread = threading.Thread(target=inference_manager, args=(total_count,))
         inf_thread.start()
         
-        def analyze_and_queue(download_res, source_input):
+        def analyze_and_queue(download_res, source_input, youtube_id):
             success, filepath, metadata = download_res
             if not success or not filepath:
                 inference_queue.put(None)
@@ -162,7 +161,7 @@ def run_turbo_pipeline(
             if res:
                 base_data, ml_patches = res
                 base_data["SourceInput"] = source_input
-                inference_queue.put((base_data, ml_patches))
+                inference_queue.put((base_data, ml_patches, youtube_id))
             else:
                 inference_queue.put(None)
 
@@ -172,8 +171,8 @@ def run_turbo_pipeline(
             download_futures.append(f)
             
         for f in as_completed(download_futures):
-            download_res, source_input = f.result()
-            executor.submit(analyze_and_queue, download_res, source_input)
+            download_res, source_input, youtube_id = f.result()
+            executor.submit(analyze_and_queue, download_res, source_input, youtube_id)
             
         inf_thread.join()
 
@@ -182,7 +181,7 @@ def run_turbo_pipeline(
     return processed_count, processed_count
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="YouTube Audio Pipeline Stealth Baseline v3.0")
+    parser = argparse.ArgumentParser(description="YouTube Audio Pipeline Standard Baseline v3.1")
     parser.add_argument("--urls-file", type=str, default="youtube_audio_pipeline/urls.example.txt")
     parser.add_argument("--url", action="append")
     parser.add_argument("--output-csv", type=str, default="data/processed/youtube_song_characteristics.csv")
@@ -205,7 +204,7 @@ def main() -> None:
     if not args.skip_models:
         model_inference.initialize_models_globally()
 
-    run_turbo_pipeline(
+    run_standard_pipeline(
         urls, 
         args.output_csv, 
         num_downloaders=args.downloaders,

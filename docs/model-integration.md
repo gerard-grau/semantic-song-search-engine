@@ -31,7 +31,7 @@ main.py:main()
    │       └─ _ensure_models_loaded()
    │           ├─ Load discogs-effnet.pb (Backbone)
    │           └─ Load 6 Head models (Genre, Mood, etc.)
-   └─ run_stealth_pipeline()
+   └─ run_standard_pipeline()
        └─ Linear Loop (1 song at a time)
            └─ extract_base_features()
                ├─ Extract Melodia Pitch + Spectral Detail

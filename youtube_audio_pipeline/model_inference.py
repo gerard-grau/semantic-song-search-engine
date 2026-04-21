@@ -1,6 +1,6 @@
 """
-Essentia TensorFlow Model Inference (CPU-Native v3.0)
-Hardcoded for CPU stability to bypass NVIDIA driver issues.
+Essentia TensorFlow Model Inference (CPU-Native v3.1)
+Hardcoded for CPU stability to resolve NVIDIA driver issues.
 """
 
 from __future__ import annotations

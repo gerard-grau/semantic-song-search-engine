@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import logging
+import uuid
 from pathlib import Path
 
 import yt_dlp
@@ -25,18 +26,18 @@ def download_to_ram(
     ram_disk_path: str = "/dev/shm/yt_audio",
 ) -> tuple[bool, str | None, dict | None]:
     """
-    Standard Downloader (No aria2c) - Mono 16kHz WAV.
+    Standard Downloader: Simple mono 16kHz WAV extraction.
     """
     ram_path = ensure_ram_path(ram_disk_path)
-
-    # Force 16kHz at the download stage to save CPU later
+    unique_id = str(uuid.uuid4())
+    
+    # Standard yt-dlp configuration
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": str(ram_path / "%(id)s.%(ext)s"),
+        "outtmpl": str(ram_path / f"{unique_id}.%(ext)s"),
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        # REMOVED ARIA2C for stealth
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "wav",
@@ -51,7 +52,7 @@ def download_to_ram(
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            filepath = ydl.prepare_filename(info).rsplit('.', 1)[0] + ".wav"
+            filepath = str(ram_path / f"{unique_id}.wav")
             
             metadata = {
                 "id": info.get("id"),
