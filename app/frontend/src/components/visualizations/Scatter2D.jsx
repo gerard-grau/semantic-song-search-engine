@@ -1,35 +1,30 @@
 import { useRef, useEffect, useCallback } from 'react'
-import { genreColor, GENRE_COLORS } from './genreColors'
+import { genreColor, GENRE_COLORS, hexToRgb } from './genreColors'
 
 /**
- * 2D Scatter with free pan & zoom and role-aware rendering.
+ * 2D Scatter — design-style rendering inspired by Cançoner.html.
  *
- * Each point carries a `role` field from the backend:
- *   "focal"    — the song you clicked (diamond shape, prominent label)
- *   "neighbor" — a nearest neighbor (normal dot)
- *   "previous" — the song you came from (dashed-ring dot)
- *   "bridge"   — an anchor from the previous neighborhood (tiny, transparent)
+ * All songs are always visible. Filtering/similarity only changes opacity.
+ * Active songs: full opacity. Inactive songs: dimmed (opacity 0.18).
+ * No size scaling — all nodes same size.
  *
- * Layered draw order: bridges → neighbors → previous → focal → hovered
- *
- * centerOnId: when points change, centers the view on that song id.
- *
- * Bug-fix note: view reset is decoupled from hover redraws by putting
- * `initedRef.current = false` in its own useEffect([points]) instead
- * of inside the draw callback — this prevents hover from resetting pan/zoom.
+ * Visual style from the design reference:
+ *   - Outer glow halo when active/hovered
+ *   - Genre-colored filled circle with subtle stroke
+ *   - White inner dot when selected/focal
+ *   - Labels: title above, artist·year below (visible on hover or focal)
  */
-export default function Scatter2D({ points, highlightedId, onPointHover, onPointClick, faded, centerOnId }) {
+export default function Scatter2D({
+  points, activeIds, scoreMap, focalId,
+  highlightedId, onPointHover, onPointClick, onPointDoubleClick,
+}) {
   const canvasRef = useRef(null)
   const viewRef = useRef({ panX: 0, panY: 0, zoom: 1 })
   const baseTransformRef = useRef({ scale: 1, offsetX: 0, offsetY: 0 })
   const dragRef = useRef({ dragging: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 })
   const initedRef = useRef(false)
-  const animFrameRef = useRef(null)
   const drawRef = useRef(null)
-  const centerOnIdRef = useRef(centerOnId)
-  const pendingFocalIdRef = useRef(null)
-
-  useEffect(() => { centerOnIdRef.current = centerOnId }, [centerOnId])
+  const dblClickTimerRef = useRef(null)
 
   const getBaseTransform = useCallback((w, h, pts) => {
     if (!pts.length) return { scale: 1, offsetX: 0, offsetY: 0 }
@@ -76,176 +71,36 @@ export default function Scatter2D({ points, highlightedId, onPointHover, onPoint
     const bt = getBaseTransform(rect.width, rect.height, points)
     baseTransformRef.current = bt
 
-    // Initialize view on first draw after points change
     if (!initedRef.current) {
-      const focalPoint = centerOnIdRef.current != null
-        ? points.find(p => p.id === centerOnIdRef.current)
-        : null
-
-      if (focalPoint) {
-        const w = toWorld(focalPoint, bt)
-        viewRef.current = {
-          panX: rect.width / 2 - w.x,
-          panY: rect.height / 2 - w.y,
-          zoom: 1,
-        }
-      } else {
-        viewRef.current = { panX: 0, panY: 0, zoom: 1 }
-      }
+      viewRef.current = { panX: 0, panY: 0, zoom: 1 }
       initedRef.current = true
     }
 
     const { zoom } = viewRef.current
-    const textColor = getComputedStyle(document.documentElement)
-      .getPropertyValue('--text-primary').trim() || '#333'
+    const hasFilter = activeIds != null
+    const NODE_R = 7  // constant radius for all nodes
 
-    // Partition by role for layered rendering
-    const bridges  = points.filter(p => p.role === 'bridge')
-    const neighbors = points.filter(p => !p.role || p.role === 'neighbor')
-    const prevFocal = points.find(p => p.role === 'previous')
-    const focalPt   = points.find(p => p.role === 'focal')
-
-    // ── Layer 1: Bridge nodes (tiny, transparent anchors) ──
-    for (const p of bridges) {
-      if (p.id === highlightedId) continue
+    // Helper to draw a node in the design style
+    function drawNode(p, opacity, isHovered, isFocal) {
       const { x: px, y: py } = pointToScreen(p, bt)
-      ctx.beginPath()
-      ctx.arc(px, py, 4 * zoom, 0, Math.PI * 2)
-      ctx.fillStyle = genreColor(p.genre)
-      ctx.globalAlpha = 0.32
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
+      const color = genreColor(p.genre)
+      const r = NODE_R * zoom
 
-    // ── Layer 2: Normal neighbor nodes ──
-    const pendingFocalId = pendingFocalIdRef.current
-    for (const p of neighbors) {
-      if (p.id === highlightedId) continue
-      if (p.id === pendingFocalId) continue
-      const { x: px, y: py } = pointToScreen(p, bt)
-      ctx.beginPath()
-      ctx.arc(px, py, 7 * zoom, 0, Math.PI * 2)
-      ctx.fillStyle = genreColor(p.genre)
-      ctx.globalAlpha = faded ? 0.25 : 0.85
-      ctx.fill()
-      ctx.globalAlpha = 1
-    }
-
-    // ── Layer 3: Previous focal node (dashed ring) ──
-    if (prevFocal && prevFocal.id !== highlightedId) {
-      const { x: px, y: py } = pointToScreen(prevFocal, bt)
-      const r = 8 * zoom
-      const color = genreColor(prevFocal.genre)
-
-      ctx.beginPath()
-      ctx.arc(px, py, r, 0, Math.PI * 2)
-      ctx.fillStyle = color
-      ctx.globalAlpha = 0.45
-      ctx.fill()
-      ctx.globalAlpha = 1
-
-      ctx.setLineDash([Math.max(2, 3 * zoom), Math.max(2, 3 * zoom)])
-      ctx.beginPath()
-      ctx.arc(px, py, r + 2 * zoom, 0, Math.PI * 2)
-      ctx.strokeStyle = '#fff'
-      ctx.lineWidth = 1.5
-      ctx.stroke()
-      ctx.setLineDash([])
-
-      // Subtle label
-      const labelSz = Math.round(Math.max(9, 10 * zoom))
-      ctx.font = `${labelSz}px system-ui, sans-serif`
-      ctx.textAlign = 'center'
-      ctx.globalAlpha = 0.65
-      ctx.fillStyle = textColor
-      ctx.fillText(prevFocal.title, px, py - r - 4 * zoom)
-      ctx.globalAlpha = 1
-    }
-
-    // ── Layer 4: Focal node (diamond + outer ring + bold label) ──
-    if (focalPt) {
-      const { x: px, y: py } = pointToScreen(focalPt, bt)
-      const r = 13 * zoom
-      const color = genreColor(focalPt.genre)
-
-      // Outer ring
-      ctx.beginPath()
-      ctx.arc(px, py, r * 1.65, 0, Math.PI * 2)
-      ctx.strokeStyle = color
-      ctx.globalAlpha = 0.35
-      ctx.lineWidth = 1.5
-      ctx.stroke()
-      ctx.globalAlpha = 1
-
-      // Diamond (rotated square)
-      const s = r * 0.75
-      ctx.save()
-      ctx.translate(px, py)
-      ctx.rotate(Math.PI / 4)
-      ctx.beginPath()
-      ctx.rect(-s, -s, s * 2, s * 2)
-      ctx.fillStyle = color
-      ctx.fill()
-      ctx.strokeStyle = '#fff'
-      ctx.lineWidth = 2
-      ctx.stroke()
-      ctx.restore()
-
-      // Bold label above
-      const labelSz = Math.round(Math.max(11, 13 * zoom))
-      ctx.font = `bold ${labelSz}px system-ui, sans-serif`
-      ctx.textAlign = 'center'
-      ctx.fillStyle = textColor
-      ctx.fillText(`${focalPt.title} — ${focalPt.artist}`, px, py - r * 1.85 - 6)
-    }
-
-    // ── Layer 5: Highlighted node (hover), unless it is the focal ──
-    if (highlightedId != null) {
-      const hp = points.find(p => p.id === highlightedId)
-      if (hp && hp.role !== 'focal' && hp.id !== pendingFocalId) {
-        const { x: px, y: py } = pointToScreen(hp, bt)
-        const HR = hp.role === 'previous' ? 10 : 12
-
-        ctx.beginPath()
-        ctx.arc(px, py, (HR + 4) * zoom, 0, Math.PI * 2)
-        ctx.fillStyle = genreColor(hp.genre)
-        ctx.globalAlpha = 0.3
-        ctx.fill()
+      if (isFocal) {
+        // Diamond shape for focal song
         ctx.globalAlpha = 1
 
+        // Outer ring
         ctx.beginPath()
-        ctx.arc(px, py, HR * zoom, 0, Math.PI * 2)
-        ctx.fillStyle = genreColor(hp.genre)
-        ctx.fill()
-        ctx.strokeStyle = '#fff'
-        ctx.lineWidth = 2.5
-        ctx.stroke()
-
-        const labelSz = Math.round(Math.max(10, 13 * zoom))
-        ctx.font = `bold ${labelSz}px system-ui, sans-serif`
-        ctx.textAlign = 'center'
-        ctx.fillStyle = textColor
-        ctx.fillText(`${hp.title} — ${hp.artist}`, px, py - HR * zoom - 8)
-      }
-    }
-
-    // ── Layer 6: Pending focal (clicked but not yet loaded) — diamond ──
-    if (pendingFocalId != null) {
-      const pp = points.find(p => p.id === pendingFocalId)
-      if (pp) {
-        const { x: px, y: py } = pointToScreen(pp, bt)
-        const r = 13 * zoom
-        const color = genreColor(pp.genre)
-
-        ctx.beginPath()
-        ctx.arc(px, py, r * 1.65, 0, Math.PI * 2)
+        ctx.arc(px, py, r * 2.2, 0, Math.PI * 2)
         ctx.strokeStyle = color
         ctx.globalAlpha = 0.35
         ctx.lineWidth = 1.5
         ctx.stroke()
         ctx.globalAlpha = 1
 
-        const s = r * 0.75
+        // Diamond
+        const s = r * 0.85
         ctx.save()
         ctx.translate(px, py)
         ctx.rotate(Math.PI / 4)
@@ -258,30 +113,128 @@ export default function Scatter2D({ points, highlightedId, onPointHover, onPoint
         ctx.stroke()
         ctx.restore()
 
+        // Label
         const labelSz = Math.round(Math.max(11, 13 * zoom))
         ctx.font = `bold ${labelSz}px system-ui, sans-serif`
         ctx.textAlign = 'center'
-        ctx.fillStyle = textColor
-        ctx.fillText(`${pp.title} — ${pp.artist}`, px, py - r * 1.85 - 6)
+        ctx.fillStyle = color
+        ctx.fillText(p.title, px, py - r * 2.5 - 4)
+        const subSz = Math.round(labelSz * 0.8)
+        ctx.font = `${subSz}px system-ui, sans-serif`
+        ctx.globalAlpha = 0.6
+        ctx.fillText(`${p.artist}`, px, py - r * 2.5 - 4 - labelSz - 2)
+        ctx.globalAlpha = 1
+        return
+      }
+
+      if (isHovered) {
+        ctx.globalAlpha = 1
+
+        // Glow halo
+        ctx.beginPath()
+        ctx.arc(px, py, (r + 8) * zoom, 0, Math.PI * 2)
+        ctx.fillStyle = color
+        ctx.globalAlpha = 0.15
+        ctx.fill()
+
+        // Outer soft ring
+        ctx.beginPath()
+        ctx.arc(px, py, r + 5 * zoom, 0, Math.PI * 2)
+        ctx.fillStyle = color
+        ctx.globalAlpha = 0.25
+        ctx.fill()
+
+        // Main circle
+        ctx.beginPath()
+        ctx.arc(px, py, r, 0, Math.PI * 2)
+        ctx.fillStyle = color
+        ctx.globalAlpha = 1
+        ctx.fill()
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 2.5
+        ctx.stroke()
+
+        // Label
+        const labelSz = Math.round(Math.max(10, 13 * zoom))
+        ctx.font = `bold ${labelSz}px system-ui, sans-serif`
+        ctx.textAlign = 'center'
+        ctx.fillStyle = color
+        ctx.fillText(p.title, px, py - r - 10)
+        const subSz = Math.round(labelSz * 0.8)
+        ctx.font = `${subSz}px system-ui, sans-serif`
+        ctx.globalAlpha = 0.6
+        ctx.fillStyle = '#e8e0d0'
+        ctx.fillText(`${p.artist} · ${p.year || ''}`, px, py - r - 10 - labelSz - 2)
+        ctx.globalAlpha = 1
+        return
+      }
+
+      // Normal node — design style: outer halo + inner fill + stroke
+      const isActive = opacity > 0.5
+
+      if (isActive) {
+        // Soft outer ring for active nodes
+        ctx.beginPath()
+        ctx.arc(px, py, r + 4 * zoom, 0, Math.PI * 2)
+        ctx.fillStyle = color
+        ctx.globalAlpha = 0.08
+        ctx.fill()
+      }
+
+      // Main circle — always genre-colored
+      ctx.beginPath()
+      ctx.arc(px, py, r, 0, Math.PI * 2)
+      ctx.fillStyle = color
+      ctx.globalAlpha = isActive ? 0.85 : 0.4
+      ctx.fill()
+      ctx.strokeStyle = color
+      ctx.lineWidth = isActive ? 1.5 : 1
+      ctx.globalAlpha = isActive ? 0.7 : 0.5
+      ctx.stroke()
+
+      ctx.globalAlpha = 1
+    }
+
+    // ── Layer 1: Dimmed nodes ──
+    if (hasFilter) {
+      for (const p of points) {
+        if (activeIds.has(p.id)) continue
+        if (p.id === highlightedId) continue
+        drawNode(p, 0.35, false, false)
       }
     }
-  }, [points, highlightedId, faded, getBaseTransform])
 
-  // Keep drawRef current so animateTo always calls the latest version
+    // ── Layer 2: Active nodes (or all if no filter) ──
+    for (const p of points) {
+      if (p.id === highlightedId) continue
+      if (p.id === focalId) continue
+      if (hasFilter && !activeIds.has(p.id)) continue
+      drawNode(p, hasFilter ? 0.9 : 0.75, false, false)
+    }
+
+    // ── Layer 3: Focal (diamond) ──
+    if (focalId != null) {
+      const fp = points.find(p => p.id === focalId)
+      if (fp && fp.id !== highlightedId) {
+        drawNode(fp, 1, false, true)
+      }
+    }
+
+    // ── Layer 4: Hovered ──
+    if (highlightedId != null) {
+      const hp = points.find(p => p.id === highlightedId)
+      if (hp) {
+        drawNode(hp, 1, true, hp.id === focalId)
+      }
+    }
+  }, [points, activeIds, scoreMap, focalId, highlightedId, getBaseTransform])
+
   useEffect(() => { drawRef.current = draw }, [draw])
 
-  // Reset view flag ONLY when points change (not on hover/highlight changes).
-  // Also cancel any in-flight animation and clear pending focal.
   useEffect(() => {
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current)
-      animFrameRef.current = null
-    }
-    pendingFocalIdRef.current = null
     initedRef.current = false
   }, [points])
 
-  // Redraw on any visual change (points, highlight, faded)
   useEffect(() => {
     draw()
     const onResize = () => draw()
@@ -289,34 +242,22 @@ export default function Scatter2D({ points, highlightedId, onPointHover, onPoint
     return () => window.removeEventListener('resize', onResize)
   }, [draw])
 
-  // Smooth pan animation toward targetPan (zoom stays fixed)
-  function animateTo(targetPanX, targetPanY, duration = 1050, onComplete = null) {
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
-
-    const startPanX = viewRef.current.panX
-    const startPanY = viewRef.current.panY
-    const startTime = performance.now()
-
-    function step(now) {
-      const t = Math.min((now - startTime) / duration, 1)
-      // cubic ease-in-out: midpoint is exactly 50% done, motion distributes evenly
-      const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
-      viewRef.current.panX = startPanX + (targetPanX - startPanX) * ease
-      viewRef.current.panY = startPanY + (targetPanY - startPanY) * ease
-      drawRef.current?.()
-      if (t < 1) {
-        animFrameRef.current = requestAnimationFrame(step)
-      } else {
-        animFrameRef.current = null
-        onComplete?.()
-      }
-    }
-
-    animFrameRef.current = requestAnimationFrame(step)
-  }
-
   function getScreenPos(p) {
     return pointToScreen(p, baseTransformRef.current)
+  }
+
+  function findClosestPoint(mx, my) {
+    let closest = null
+    let closestDist = 20 * viewRef.current.zoom
+    for (const p of points) {
+      const sp = getScreenPos(p)
+      const dist = Math.hypot(mx - sp.x, my - sp.y)
+      if (dist < closestDist) {
+        closestDist = dist
+        closest = p
+      }
+    }
+    return closest
   }
 
   function handleMouseMove(e) {
@@ -335,18 +276,7 @@ export default function Scatter2D({ points, highlightedId, onPointHover, onPoint
     const rect = canvas.getBoundingClientRect()
     const mx = e.clientX - rect.left
     const my = e.clientY - rect.top
-
-    let closest = null
-    let closestDist = 20 * viewRef.current.zoom
-
-    for (const p of points) {
-      const sp = getScreenPos(p)
-      const dist = Math.hypot(mx - sp.x, my - sp.y)
-      if (dist < closestDist) {
-        closestDist = dist
-        closest = p
-      }
-    }
+    const closest = findClosestPoint(mx, my)
     onPointHover(closest ? closest.id : null)
   }
 
@@ -372,22 +302,20 @@ export default function Scatter2D({ points, highlightedId, onPointHover, onPoint
       const rect = canvas.getBoundingClientRect()
       const mx = e.clientX - rect.left
       const my = e.clientY - rect.top
+      const closest = findClosestPoint(mx, my)
 
-      for (const p of points) {
-        const sp = getScreenPos(p)
-        if (Math.hypot(mx - sp.x, my - sp.y) < 15 * viewRef.current.zoom) {
-          // Mark as pending immediately so it renders as a diamond during the pan
-          pendingFocalIdRef.current = p.id
-          drawRef.current?.()
-          // Pan to centre, then trigger the neighborhood fetch
-          const w = toWorld(p, baseTransformRef.current)
-          const targetPanX = rect.width / 2 - w.x * viewRef.current.zoom
-          const targetPanY = rect.height / 2 - w.y * viewRef.current.zoom
-          animateTo(targetPanX, targetPanY, 1050, () => {
-            pendingFocalIdRef.current = null
-            onPointClick(p.id)
-          })
-          return
+      if (closest) {
+        if (dblClickTimerRef.current && dblClickTimerRef.current.id === closest.id) {
+          clearTimeout(dblClickTimerRef.current.timer)
+          dblClickTimerRef.current = null
+          onPointDoubleClick?.(closest.id)
+        } else {
+          if (dblClickTimerRef.current) clearTimeout(dblClickTimerRef.current.timer)
+          const timer = setTimeout(() => {
+            dblClickTimerRef.current = null
+            onPointClick(closest.id)
+          }, 250)
+          dblClickTimerRef.current = { id: closest.id, timer }
         }
       }
     }
@@ -398,21 +326,16 @@ export default function Scatter2D({ points, highlightedId, onPointHover, onPoint
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
-
     const mx = e.clientX - rect.left
     const my = e.clientY - rect.top
-
     const oldZoom = viewRef.current.zoom
     const factor = e.deltaY > 0 ? 0.9 : 1.1
     const newZoom = Math.max(0.2, Math.min(15, oldZoom * factor))
-
     const worldX = (mx - viewRef.current.panX) / oldZoom
     const worldY = (my - viewRef.current.panY) / oldZoom
-
     viewRef.current.zoom = newZoom
     viewRef.current.panX = mx - worldX * newZoom
     viewRef.current.panY = my - worldY * newZoom
-
     draw()
   }
 
@@ -435,6 +358,9 @@ export default function Scatter2D({ points, highlightedId, onPointHover, onPoint
             {g}
           </span>
         ))}
+        <span className="legend-item legend-hint">
+          clic = similars | doble clic = detall
+        </span>
       </div>
     </div>
   )

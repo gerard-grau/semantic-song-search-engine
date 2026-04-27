@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.backend.api.routes.search import router as search_router
+from app.backend.api.routes.cercador import router as cercador_router
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ app.add_middleware(
 )
 
 app.include_router(search_router)
+app.include_router(cercador_router)
 
 
 @app.get("/")

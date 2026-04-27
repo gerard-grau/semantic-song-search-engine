@@ -20,6 +20,11 @@ export async function fetchSongDetail(songId) {
   return data
 }
 
+export async function cercadorSearch(query) {
+  const { data } = await api.get('/cercador', { params: { q: query } })
+  return data
+}
+
 export async function fetchNeighbors(songId, options = {}) {
   const {
     n = 20,

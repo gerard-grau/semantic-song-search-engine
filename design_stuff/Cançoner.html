@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cançoner — Cançons Catalanes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<style>
+  @keyframes pulse-ring {
+    0%   { r: 8; opacity: 0.7; }
+    60%  { r: 18; opacity: 0.15; }
+    100% { r: 8; opacity: 0.7; }
+  }
+  .song-pulse { animation: pulse-ring 2.2s ease-out infinite; }
+</style>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0e0d0b; --bg2: #161410; --bg3: #1e1b16;
+    --border: rgba(255,255,255,0.07);
+    --text: #e8e0d0; --text-dim: rgba(232,224,208,0.45); --text-dimmer: rgba(232,224,208,0.22);
+    --amber: oklch(0.74 0.16 65); --amber-dim: oklch(0.74 0.16 65 / 0.18);
+    --rose: oklch(0.65 0.12 15); --teal: oklch(0.68 0.12 195); --violet: oklch(0.65 0.14 295);
+    --panel-w: 420px;
+  }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'Space Mono', monospace; }
+  #root { width: 100%; height: 100%; }
+  ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ─── TWEAK DEFAULTS ──────────────────────────────────────────────────────
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "ambiance": 42,
+  "nodeForm": "dot",
+  "palette": "amber"
+}/*EDITMODE-END*/;
+
+// ─── PALETTES ────────────────────────────────────────────────────────────
+const PALETTES = {
+  amber: {
+    bg: "#0e0d0b", bg2: "#161410", bg3: "#1e1b16",
+    text: "#e8e0d0", border: "rgba(255,255,255,0.07)",
+    accent: "oklch(0.74 0.16 65)",
+    grad0: "#1a1710", grad1: "#0a0908",
+    starColor: "white",
+  },
+  cobalt: {
+    bg: "#080c14", bg2: "#0d1220", bg3: "#111827",
+    text: "#c8d8f0", border: "rgba(100,160,255,0.10)",
+    accent: "oklch(0.72 0.2 240)",
+    grad0: "#0d1830", grad1: "#050810",
+    starColor: "#a0c4ff",
+  },
+  sepia: {
+    bg: "#120e09", bg2: "#1c1610", bg3: "#251e14",
+    text: "#e8d8b8", border: "rgba(200,160,80,0.10)",
+    accent: "oklch(0.72 0.14 60)",
+    grad0: "#221a0e", grad1: "#0e0a05",
+    starColor: "#f0d890",
+  },
+};
+
+function applyPalette(pal) {
+  const root = document.documentElement;
+  root.style.setProperty('--bg', pal.bg);
+  root.style.setProperty('--bg2', pal.bg2);
+  root.style.setProperty('--bg3', pal.bg3);
+  root.style.setProperty('--text', pal.text);
+  root.style.setProperty('--border', pal.border);
+  root.style.setProperty('--amber', pal.accent);
+  document.body.style.background = pal.bg;
+}
+
+// ─── DATA ──────────────────────────────────────────────────────────────────
+
+const SONGS = [
+  { id:1, title:"Boig per tu", artist:"Sau", year:1990, genre:"pop", album:"Boig per tu", duration:"2:11", snippet:"Estic boig per tu, no ho puc evitar...", lyrics:"Primer vers de la cançó que parla de la llibertat.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/sau/boig-per-tu/boig-per-tu", ex:0.5432, ey:0.0912 },
+  { id:2, title:"El teu nom", artist:"Lax'n'Busto", year:1996, genre:"pop", album:"Tos", duration:"5:15", snippet:"El teu nom ressona dins del meu cap...", lyrics:"Primer vers de la cançó que parla de la terra.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/laxnbusto/tos/el-teu-nom", ex:0.3732, ey:0.395 },
+  { id:3, title:"Bona nit", artist:"Els Pets", year:2001, genre:"pop", album:"Bon dia", duration:"2:30", snippet:"Bona nit, que descansis bé, demà serà un altre dia...", lyrics:"Primer vers de la cançó que parla de la nit.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/els-pets/bon-dia/bona-nit", ex:0.5501, ey:0.3798 },
+  { id:4, title:"Camins", artist:"Sopa de Cabra", year:1991, genre:"pop", album:"Ben endins", duration:"2:53", snippet:"Camins que no porten enlloc, camins que et fan tornar...", lyrics:"Primer vers de la cançó que parla de el futur.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/sopa-de-cabra/ben-endins/camins", ex:0.4101, ey:0.3712 },
+  { id:5, title:"Ploure", artist:"Manel", year:2008, genre:"pop", album:"Els millors professors europeus", duration:"5:14", snippet:"Ploure sobre mullat, ploure i callar...", lyrics:"Primer vers de la cançó que parla de la natura.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/manel/els-millors-professors-europeus/ploure", ex:0.7681, ey:0.4071 },
+  { id:6, title:"Torna a casa", artist:"Oques Grasses", year:2019, genre:"pop", album:"A tope amb la vida", duration:"3:56", snippet:"Torna a casa que t'espero, torna a casa si us plau...", lyrics:"Primer vers de la cançó que parla de la vida.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/oques-grasses/a-tope-amb-la-vida/torna-a-casa", ex:0.635, ey:0.4385 },
+  { id:7, title:"Gotta Be Patient", artist:"Stay Homas", year:2020, genre:"pop", album:"Bienvenido a la resistencia", duration:"3:20", snippet:"Gotta be patient, gonna be alright...", lyrics:"Primer vers de la cançó que parla de el temps.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/stay-homas/bienvenido-a-la-resistencia/gotta-be-patient", ex:0.7696, ey:0.0687 },
+  { id:8, title:"Llençol", artist:"La Pegatina", year:2014, genre:"pop", album:"Via Lansen", duration:"3:47", snippet:"Sota el llençol tot és possible, tot és calent...", lyrics:"Primer vers de la cançó que parla de els somnis.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/la-pegatina/via-lansen/llen-ol", ex:0.6296, ey:0.5081 },
+  { id:9, title:"Em sento estrany", artist:"Buhos", year:2016, genre:"pop", album:"Ens banyem?", duration:"4:52", snippet:"Em sento estrany avui, no sé què em passa...", lyrics:"Primer vers de la cançó que parla de la lluita.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/buhos/ens-banyem/em-sento-estrany", ex:0.427, ey:0.2689 },
+  { id:10, title:"Ànima lliure", artist:"Doctor Prats", year:2018, genre:"pop", album:"Nació Digital", duration:"5:18", snippet:"Sóc una ànima lliure que vol volar...", lyrics:"Primer vers de la cançó que parla de l'amor.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/doctor-prats/naci-digital/nima-lliure", ex:0.2599, ey:0.4877 },
+  { id:11, title:"L'Empordà", artist:"Sopa de Cabra", year:1989, genre:"rock", album:"L'Empordà", duration:"5:32", snippet:"L'Empordà, vent de tramuntana i mar brava...", lyrics:"Primer vers de la cançó que parla de la llibertat.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/sopa-de-cabra/lempord/lempord", ex:0.8935, ey:0.6473 },
+  { id:12, title:"Qualsevol nit pot sortir el sol", artist:"Jaume Sisa", year:1975, genre:"rock", album:"Qualsevol nit", duration:"3:33", snippet:"Qualsevol nit pot sortir el sol...", lyrics:"Primer vers de la cançó que parla de la terra.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/jaume-sisa/qualsevol-nit/qualsevol-nit-pot-sortir-el-sol", ex:0.6841, ey:0.5658 },
+  { id:13, title:"No tinc por", artist:"Txarango", year:2016, genre:"rock", album:"El forat", duration:"4:42", snippet:"No tinc por de caminar, no tinc por de caure...", lyrics:"Primer vers de la cançó que parla de la nit.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/txarango/el-forat/no-tinc-por", ex:0.5304, ey:0.247 },
+  { id:14, title:"Benvolgut", artist:"Sau", year:1993, genre:"rock", album:"El més gran dels pecadors", duration:"5:52", snippet:"Benvolgut, t'escric des d'on em trobo ara...", lyrics:"Primer vers de la cançó que parla de el futur.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/sau/el-m-s-gran-dels-pecadors/benvolgut", ex:0.6566, ey:0.2986 },
+  { id:15, title:"Mar i cel", artist:"La Companyia Elèctrica Dharma", year:1978, genre:"rock", album:"L'àngel de la guarda", duration:"2:23", snippet:"Entre el mar i el cel hi ha la meva terra...", lyrics:"Primer vers de la cançó que parla de la natura.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/la-companyia-el-ctrica-dharma/l-ngel-de-la-guarda/mar-i-cel", ex:0.6179, ey:0.7966 },
+  { id:16, title:"Sempre endavant", artist:"Brams", year:2003, genre:"rock", album:"Diplomàcia", duration:"5:18", snippet:"Sempre endavant, mai enrere, lluitant pel que creiem...", lyrics:"Primer vers de la cançó que parla de la vida.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/brams/diplom-cia/sempre-endavant", ex:0.5227, ey:0.3639 },
+  { id:17, title:"Bon dia", artist:"Els Pets", year:1994, genre:"rock", album:"Bon dia", duration:"2:59", snippet:"Bon dia, com estàs? Fa temps que no ens veiem...", lyrics:"Primer vers de la cançó que parla de el temps.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/els-pets/bon-dia/bon-dia", ex:0.5382, ey:0.3253 },
+  { id:18, title:"Paraules", artist:"Mishima", year:2006, genre:"rock", album:"Set", duration:"4:49", snippet:"Les paraules que no dic es queden dins...", lyrics:"Primer vers de la cançó que parla de els somnis.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/mishima/set/paraules", ex:0.3491, ey:0.5155 },
+  { id:19, title:"Tot és ara", artist:"Gossos", year:2005, genre:"rock", album:"Ull per ull", duration:"2:15", snippet:"Tot és ara, tot és aquí, no deixis escapar...", lyrics:"Primer vers de la cançó que parla de la lluita.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/gossos/ull-per-ull/tot-s-ara", ex:0.4633, ey:0.4294 },
+  { id:20, title:"L'Estaca", artist:"Lluís Llach", year:1968, genre:"folk", album:"L'Estaca", duration:"2:45", snippet:"L'avi Siset em parlava de bon matí al portal...", lyrics:"Primer vers de la cançó que parla de l'amor.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/llu-s-llach/lestaca/lestaca", ex:0.5653, ey:0.7185 },
+  { id:21, title:"El Cant dels Ocells", artist:"Pau Casals", year:1971, genre:"folk", album:"Pau Casals", duration:"2:49", snippet:"Els ocells que van pel món no saben on van a dormir...", lyrics:"Primer vers de la cançó que parla de la llibertat.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/pau-casals/pau-casals/el-cant-dels-ocells", ex:0.6714, ey:0.8615 },
+  { id:22, title:"Mediterrània", artist:"Joan Manuel Serrat", year:1971, genre:"folk", album:"Mediterráneo", duration:"4:38", snippet:"Al vent, a la pluja, al sol, els homes lluiten...", lyrics:"Primer vers de la cançó que parla de la terra.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/joan-manuel-serrat/mediterr-neo/mediterr-nia", ex:0.8229, ey:1 },
+  { id:23, title:"La Balanguera", artist:"Maria del Mar Bonet", year:1974, genre:"folk", album:"La Balanguera", duration:"3:31", snippet:"La Balanguera misteriosa com l'aranya de sa teranyina...", lyrics:"Primer vers de la cançó que parla de la nit.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/maria-del-mar-bonet/la-balanguera/la-balanguera", ex:0.9144, ey:0.8684 },
+  { id:24, title:"Paraules d'Amor", artist:"Joan Manuel Serrat", year:1968, genre:"folk", album:"Paraules d'Amor", duration:"5:15", snippet:"T'estimo, paraules d'amor que fan el món més gran...", lyrics:"Primer vers de la cançó que parla de el futur.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/joan-manuel-serrat/paraules-damor/paraules-damor", ex:0.6397, ey:0.8487 },
+  { id:25, title:"Què volen aquesta gent?", artist:"Maria del Mar Bonet", year:1968, genre:"folk", album:"Què volen?", duration:"4:45", snippet:"Què volen aquesta gent que truquen de matinada?...", lyrics:"Primer vers de la cançó que parla de la natura.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/maria-del-mar-bonet/qu-volen/qu-volen-aquesta-gent", ex:0.5032, ey:0.7251 },
+  { id:26, title:"Jo vinc d'un silenci", artist:"Raimon", year:1964, genre:"folk", album:"D'un temps d'un país", duration:"5:51", snippet:"Jo vinc d'un silenci antic i molt llarg...", lyrics:"Primer vers de la cançó que parla de la vida.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/raimon/dun-temps-dun-pa-s/jo-vinc-dun-silenci", ex:0.6576, ey:0.7731 },
+  { id:27, title:"Al vent", artist:"Raimon", year:1963, genre:"folk", album:"Al vent", duration:"5:49", snippet:"Al vent, la cara al vent, el cor al vent...", lyrics:"Primer vers de la cançó que parla de el temps.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/raimon/al-vent/al-vent", ex:0.9024, ey:0.7333 },
+  { id:28, title:"Catalonia", artist:"Ëhia", year:2021, genre:"electronica", album:"Synth Mediterrani", duration:"2:48", snippet:"Pols electrònic que recorre la costa catalana...", lyrics:"Primer vers de la cançó que parla de els somnis.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/hia/synth-mediterrani/catalonia", ex:0.2377, ey:0.9779 },
+  { id:29, title:"Nit de lluna", artist:"John Talabot", year:2012, genre:"electronica", album:"ƒin", duration:"4:57", snippet:"La nit de lluna plena, els sons es fonen...", lyrics:"Primer vers de la cançó que parla de la lluita.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/john-talabot/in/nit-de-lluna", ex:0.4211, ey:0.9542 },
+  { id:30, title:"Digital", artist:"Cálido Home", year:2020, genre:"electronica", album:"Ones", duration:"2:18", snippet:"Tot és digital, tot és senyal, ones de llum...", lyrics:"Primer vers de la cançó que parla de l'amor.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/c-lido-home/ones/digital", ex:0.2176, ey:0.9094 },
+  { id:31, title:"Freqüència", artist:"Renaldo & Clara", year:2018, genre:"electronica", album:"Ones curtes", duration:"5:15", snippet:"La freqüència del teu cos vibra amb la meva...", lyrics:"Primer vers de la cançó que parla de la llibertat.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/renaldo-clara/ones-curtes/freq-ncia", ex:0.1001, ey:0.8599 },
+  { id:32, title:"Aurora", artist:"Brossa Quartet", year:2019, genre:"electronica", album:"Noves textures", duration:"2:40", snippet:"L'aurora boreal dins d'una habitació fosca...", lyrics:"Primer vers de la cançó que parla de la terra.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/brossa-quartet/noves-textures/aurora", ex:0.3035, ey:0.8743 },
+  { id:33, title:"Pulsacions", artist:"Za!", year:2015, genre:"electronica", album:"Wanananai", duration:"3:37", snippet:"Pulsacions que acceleren quan baixa el baix...", lyrics:"Primer vers de la cançó que parla de la nit.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/za/wanananai/pulsacions", ex:0, ey:0.634 },
+  { id:34, title:"Ones", artist:"El Petit de Cal Eril", year:2017, genre:"electronica", album:"Energia fosca", duration:"5:24", snippet:"Les ones van i vénen com les marees del so...", lyrics:"Primer vers de la cançó que parla de el futur.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/el-petit-de-cal-eril/energia-fosca/ones", ex:0.4686, ey:0.9066 },
+  { id:35, title:"Circuit", artist:"MANS O", year:2022, genre:"electronica", album:"Panoràmica", duration:"4:59", snippet:"El circuit es tanca, la corrent flueix...", lyrics:"Primer vers de la cançó que parla de la natura.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/mans-o/panor-mica/circuit", ex:0.1085, ey:0.9908 },
+  { id:36, title:"La raó d'ells", artist:"Nach", year:2014, genre:"hip-hop", album:"A través de mí", duration:"3:42", snippet:"La raó d'ells no és la meva raó...", lyrics:"Primer vers de la cançó que parla de la vida.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/nach/a-trav-s-de-m/la-ra-dells", ex:0.401, ey:0.3287 },
+  { id:37, title:"Terra", artist:"Lágrimas de Sangre", year:2012, genre:"hip-hop", album:"Orígens", duration:"3:59", snippet:"Aquesta terra em crida, aquest país em parla...", lyrics:"Primer vers de la cançó que parla de el temps.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/l-grimas-de-sangre/or-gens/terra", ex:0.5168, ey:0.3854 },
+  { id:38, title:"Sense excuses", artist:"Tsjuder", year:2019, genre:"hip-hop", album:"Ritmes urbans", duration:"4:14", snippet:"Sense excuses ni disculpes, visc com vull...", lyrics:"Primer vers de la cançó que parla de els somnis.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/tsjuder/ritmes-urbans/sense-excuses", ex:0.4773, ey:0 },
+  { id:39, title:"Carrer", artist:"El Noi de la Mare", year:2017, genre:"hip-hop", album:"Rimes de barri", duration:"4:14", snippet:"El carrer m'ha ensenyat el que l'escola no...", lyrics:"Primer vers de la cançó que parla de la lluita.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/el-noi-de-la-mare/rimes-de-barri/carrer", ex:0.5676, ey:0.3411 },
+  { id:40, title:"Versos lliures", artist:"Lídia Pujol", year:2020, genre:"hip-hop", album:"Spoken Word", duration:"5:22", snippet:"Versos lliures que volen pels terrats...", lyrics:"Primer vers de la cançó que parla de l'amor.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/l-dia-pujol/spoken-word/versos-lliures", ex:0.2255, ey:0.4636 },
+  { id:41, title:"Ritme vital", artist:"BocaPrima", year:2018, genre:"hip-hop", album:"Flow del Mediterrani", duration:"5:39", snippet:"El ritme vital que porto dins no para...", lyrics:"Primer vers de la cançó que parla de la llibertat.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/bocaprima/flow-del-mediterrani/ritme-vital", ex:0.2267, ey:0.1517 },
+  { id:42, title:"Foc i flames", artist:"Dj Rune", year:2016, genre:"hip-hop", album:"Underground BCN", duration:"2:55", snippet:"Foc i flames, la ciutat crema de nit...", lyrics:"Primer vers de la cançó que parla de la terra.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/dj-rune/underground-bcn/foc-i-flames", ex:0.6774, ey:0.4224 },
+  { id:43, title:"Codi postal", artist:"La Fúmiga", year:2021, genre:"hip-hop", album:"Eixos vitals", duration:"3:46", snippet:"El meu codi postal defineix d'on vinc...", lyrics:"Primer vers de la cançó que parla de la nit.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/la-f-miga/eixos-vitals/codi-postal", ex:0.398, ey:0.3442 },
+  { id:44, title:"Fica-li salsa", artist:"La Pegatina", year:2012, genre:"rumba", album:"Revulsiu", duration:"5:12", snippet:"Fica-li salsa a la vida, balla fins a morir...", lyrics:"Primer vers de la cançó que parla de el futur.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/la-pegatina/revulsiu/fica-li-salsa", ex:0.8334, ey:0.409 },
+  { id:45, title:"Anirem ràpid", artist:"Txarango", year:2012, genre:"rumba", album:"Benvinguts al llarg viatge", duration:"4:16", snippet:"Anirem ràpid, anirem lluny, junts...", lyrics:"Primer vers de la cançó que parla de la natura.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/txarango/benvinguts-al-llarg-viatge/anirem-r-pid", ex:0.5664, ey:0.518 },
+  { id:46, title:"Uh-la-la", artist:"Doctor Prats", year:2017, genre:"rumba", album:"Uh-la-la", duration:"4:38", snippet:"Uh-la-la, quina calor, uh-la-la, quin sabor...", lyrics:"Primer vers de la cançó que parla de la vida.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/doctor-prats/uh-la-la/uh-la-la", ex:0.8693, ey:0.5275 },
+  { id:47, title:"Benvinguts", artist:"Buhos", year:2016, genre:"rumba", album:"Ens banyem?", duration:"3:33", snippet:"Benvinguts a la festa, benvinguts al ball...", lyrics:"Primer vers de la cançó que parla de el temps.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/buhos/ens-banyem/benvinguts", ex:0.979, ey:0.4517 },
+  { id:48, title:"Colors", artist:"Oques Grasses", year:2019, genre:"rumba", album:"A tope amb la vida", duration:"2:43", snippet:"Colors que pinten el cel de la tarda...", lyrics:"Primer vers de la cançó que parla de els somnis.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/oques-grasses/a-tope-amb-la-vida/colors", ex:0.802, ey:0.9247 },
+  { id:49, title:"Tirant lo Blanc", artist:"Obrint Pas", year:2004, genre:"rumba", album:"Benvinguts al paradís", duration:"5:50", snippet:"Tirant lo Blanc, cavaller de la corona...", lyrics:"Primer vers de la cançó que parla de la lluita.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/obrint-pas/benvinguts-al-parad-s/tirant-lo-blanc", ex:1, ey:0.7281 },
+  { id:50, title:"Festa major", artist:"La Pegatina", year:2017, genre:"rumba", album:"Eureka", duration:"4:22", snippet:"Festa major al poble, tothom al carrer...", lyrics:"Primer vers de la cançó que parla de l'amor.\nEl ritme ens porta cap a un lloc on tot és possible.\nLes paraules es barregen amb la melodia\ni el cor batega al compàs de la música.\n\nSegon vers que aprofundeix en el sentiment.\nCada nota és un record que no volem oblidar.\nEntre acords i silencis trobem la veritat,\naquella que només la música sap explicar.\n\nTercer vers que tanca la història.\nI quan la cançó s'acaba, el sentiment perdura.\nPerquè la música és eterna, com el mar,\ni cada vegada que la escoltem, tornem a començar.", url:"https://www.viasona.cat/grup/la-pegatina/eureka/festa-major", ex:0.8045, ey:0.7919 },
+];
+
+// ─── SIMILARITY NEIGHBORS (top-8 cosine on 384-dim embeddings) ──────────────
+const NEIGHBORS = {
+  1:[17,5,19,13,2,9,8,3], 2:[9,10,20,17,18,3,1,36], 3:[17,20,2,9,12,19,45,21],
+  4:[18,19,10,2,1,8,13,17], 5:[1,8,6,14,27,22,47,19], 6:[9,5,19,1,2,37,17,16],
+  7:[17,5,6,3,1,13,16,9], 8:[5,19,1,44,50,2,4,3], 9:[17,2,19,16,13,45,3,1],
+  10:[40,18,2,33,20,9,45,17], 11:[15,22,27,19,20,37,5,47], 12:[3,19,17,21,13,18,15,20],
+  13:[17,19,45,18,9,36,16,1], 14:[19,17,16,47,5,1,37,12], 15:[11,37,34,12,19,20,39,36],
+  16:[19,17,18,45,9,13,14,15], 17:[3,19,20,9,18,13,16,2], 18:[19,17,24,20,10,16,13,36],
+  19:[17,16,18,9,13,45,36,20], 20:[17,18,19,2,3,22,25,24], 21:[22,24,17,20,18,12,26,3],
+  22:[24,27,20,21,23,11,26,5], 23:[22,20,25,21,27,24,5,11], 24:[18,22,20,21,26,10,45,27],
+  25:[20,17,40,18,23,10,22,19], 26:[27,20,21,24,22,19,18,29], 27:[26,22,47,11,5,46,20,15],
+  28:[34,30,33,19,20,35,31,18], 29:[12,3,20,28,26,21,31,34], 30:[28,31,34,19,35,33,15,29],
+  31:[33,35,30,28,18,29,34,19], 32:[28,20,18,19,9,30,33,31], 33:[31,35,40,28,18,10,41,19],
+  34:[28,30,17,15,21,27,19,26], 35:[33,31,28,30,18,29,34,10], 36:[39,19,40,18,13,37,17,2],
+  37:[40,19,20,36,42,15,13,17], 38:[36,1,40,13,37,5,41,39], 39:[36,15,42,13,19,37,17,18],
+  40:[10,37,36,41,33,18,19,20], 41:[40,37,18,33,36,10,1,4], 42:[37,36,39,5,19,11,26,43],
+  43:[37,36,39,2,42,41,40,17], 44:[47,8,46,50,17,45,1,3], 45:[13,19,16,9,17,3,40,20],
+  46:[47,44,27,5,45,49,48,11], 47:[27,44,50,46,17,14,5,11], 48:[49,46,21,47,15,6,27,34],
+  49:[48,11,47,27,46,21,50,45], 50:[47,44,8,20,17,22,45,3],
+};
+
+const GENRES = {
+  pop:         { label: "Pop",               color: "var(--amber)" },
+  rock:        { label: "Rock",              color: "var(--rose)" },
+  folk:        { label: "Folk / Nova Cançó", color: "var(--teal)" },
+  electronica: { label: "Electrònica",       color: "var(--violet)" },
+  "hip-hop":   { label: "Hip-hop",           color: "oklch(0.7 0.14 130)" },
+  rumba:       { label: "Rumba",             color: "oklch(0.72 0.14 30)" },
+};
+
+// ─── UTILS ────────────────────────────────────────────────────────────────
+
+function useWindowSize() {
+  const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
+  useEffect(() => {
+    const handle = () => setSize({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', handle);
+    return () => window.removeEventListener('resize', handle);
+  }, []);
+  return size;
+}
+
+// ─── STAR FIELD ──────────────────────────────────────────────────────────
+
+function Stars({ width, height, ambiance, palette }) {
+  const count = Math.round(30 + ambiance * 2.2);
+  const pal = PALETTES[palette] || PALETTES.amber;
+  const stars = useMemo(() => {
+    const arr = [];
+    for (let i = 0; i < 220; i++) {
+      arr.push({ x: Math.random() * width, y: Math.random() * height, r: Math.random() * 1.3 + 0.2, op: Math.random() * 0.3 + 0.04 });
+    }
+    return arr;
+  }, [width, height]);
+  return (
+    <g>{stars.slice(0, count).map((s, i) => <circle key={i} cx={s.x} cy={s.y} r={s.r} fill={pal.starColor} opacity={s.op} />)}</g>
+  );
+}
+
+// ─── CANVAS ──────────────────────────────────────────────────────────────
+
+const WORLD_W = 2400;
+const WORLD_H = 1800;
+const PADDING = 180;
+
+function worldPos(song) {
+  return {
+    x: PADDING + song.ex * (WORLD_W - PADDING * 2),
+    y: PADDING + (1 - song.ey) * (WORLD_H - PADDING * 2),
+  };
+}
+
+function SongNode({ song, selected, hovered, onHover, onClick, scale, nodeForm, ambiance }) {
+  const { x, y } = worldPos(song);
+  const genre = GENRES[song.genre];
+  const isActive = selected || hovered;
+  const glowMult = 1 + ambiance * 0.025;
+  const nodeR = Math.max(7, 8 / Math.pow(scale, 0.3));
+  const labelSize = Math.max(10, 11 / Math.pow(scale, 0.25));
+
+  const renderNode = () => {
+    if (nodeForm === 'ring') {
+      return (
+        <>
+          {isActive && <circle cx={x} cy={y} r={(nodeR + 14) * glowMult} fill={genre.color} opacity={0.13} />}
+          <circle cx={x} cy={y} r={nodeR + 5} fill="none" stroke={genre.color} strokeWidth={isActive ? 2 : 1.2} opacity={isActive ? 0.9 : 0.45} style={{ transition: 'all 0.18s' }} />
+          <circle cx={x} cy={y} r={nodeR * 0.35} fill={genre.color} opacity={isActive ? 1 : 0.4} />
+        </>
+      );
+    }
+    if (nodeForm === 'pulse') {
+      return (
+        <>
+          <circle cx={x} cy={y} r={nodeR} fill={genre.color} opacity={0.18} className="song-pulse" style={{ animationDelay: `${(song.id * 0.37) % 2.2}s` }} />
+          <circle cx={x} cy={y} r={nodeR * 0.55} fill={genre.color} opacity={isActive ? 1 : 0.7} style={{ transition: 'all 0.18s' }} />
+          {isActive && <circle cx={x} cy={y} r={(nodeR + 16) * glowMult} fill={genre.color} opacity={0.14} />}
+        </>
+      );
+    }
+    // dot (default)
+    return (
+      <>
+        {isActive && <circle cx={x} cy={y} r={(nodeR + 14) * glowMult} fill={genre.color} opacity={0.12} />}
+        <circle cx={x} cy={y} r={nodeR + 6} fill={genre.color} opacity={isActive ? 0.22 : 0.06} style={{ transition: 'opacity 0.2s' }} />
+        <circle cx={x} cy={y} r={nodeR} fill={isActive ? genre.color : "rgba(232,224,208,0.15)"} stroke={genre.color} strokeWidth={isActive ? 0 : 1.5} style={{ transition: 'all 0.18s' }} />
+        {selected && <circle cx={x} cy={y} r={3} fill="white" opacity={0.9} />}
+      </>
+    );
+  };
+
+  return (
+    <g style={{ cursor: 'pointer' }} onMouseEnter={() => onHover(song.id)} onMouseLeave={() => onHover(null)} onClick={() => onClick(song)}>
+      {renderNode()}
+      <text x={x} y={y - nodeR - 8} textAnchor="middle" fill={isActive ? genre.color : "rgba(232,224,208,0.55)"} fontSize={labelSize} fontFamily="'Space Mono', monospace" fontWeight={isActive ? "700" : "400"} style={{ pointerEvents: 'none', transition: 'all 0.18s' }}>{song.title}</text>
+      <text x={x} y={y - nodeR - 8 - labelSize - 2} textAnchor="middle" fill={isActive ? "rgba(232,224,208,0.6)" : "rgba(232,224,208,0.28)"} fontSize={labelSize * 0.8} fontFamily="'Space Mono', monospace" style={{ pointerEvents: 'none', transition: 'all 0.18s' }}>{song.artist} {song.year ? `· ${song.year}` : ''}</text>
+    </g>
+  );
+}
+
+// ─── AXES LABELS ─────────────────────────────────────────────────────────
+
+function AxisLabels() {
+  return (
+    <g opacity={0.18} fontFamily="'Space Mono', monospace" fontSize={11}>
+      <text x={PADDING} y={WORLD_H - 30} fill="white">PC1 −</text>
+      <text x={WORLD_W - PADDING} y={WORLD_H - 30} fill="white" textAnchor="end">PC1 +</text>
+      <line x1={PADDING} y1={WORLD_H - 20} x2={WORLD_W - PADDING} y2={WORLD_H - 20} stroke="white" strokeDasharray="4,6" />
+      <text x={25} y={WORLD_H - PADDING} fill="white" transform={`rotate(-90, 20, ${WORLD_H - PADDING})`}>PC2 −</text>
+      <text x={25} y={PADDING} fill="white" transform={`rotate(-90, 20, ${PADDING})`} textAnchor="end">PC2 +</text>
+      <line x1={20} y1={WORLD_H - PADDING} x2={20} y2={PADDING} stroke="white" strokeDasharray="4,6" />
+    </g>
+  );
+}
+
+// ─── CLUSTER BUBBLES ─────────────────────────────────────────────────────
+
+function ClusterZones({ ambiance }) {
+  const opacity = 0.03 + ambiance * 0.0016;
+  const zones = [
+    { cx: 0.50, cy: 0.30, rx: 0.22, ry: 0.18, color: "var(--amber)" },
+    { cx: 0.63, cy: 0.50, rx: 0.22, ry: 0.18, color: "var(--rose)" },
+    { cx: 0.72, cy: 0.82, rx: 0.20, ry: 0.14, color: "var(--teal)" },
+    { cx: 0.25, cy: 0.88, rx: 0.18, ry: 0.10, color: "var(--violet)" },
+    { cx: 0.43, cy: 0.28, rx: 0.14, ry: 0.14, color: "oklch(0.7 0.14 130)" },
+    { cx: 0.83, cy: 0.60, rx: 0.16, ry: 0.18, color: "oklch(0.72 0.14 30)" },
+  ];
+  return (
+    <g opacity={opacity}>
+      {zones.map((z, i) => {
+        const cx = PADDING + z.cx * (WORLD_W - PADDING * 2);
+        const cy = PADDING + (1 - z.cy) * (WORLD_H - PADDING * 2);
+        const rx = z.rx * (WORLD_W - PADDING * 2);
+        const ry = z.ry * (WORLD_H - PADDING * 2);
+        return <ellipse key={i} cx={cx} cy={cy} rx={rx} ry={ry} fill={z.color} />;
+      })}
+    </g>
+  );
+}
+
+// ─── DETAIL PANEL ────────────────────────────────────────────────────────
+
+function DetailPanel({ song, onClose }) {
+  const [activeStanza, setActiveStanza] = useState(0);
+  const genre = song ? GENRES[song.genre] : null;
+  const stanzas = song ? song.lyrics.split('\n\n') : [];
+  const open = !!song;
+
+  useEffect(() => { setActiveStanza(0); }, [song && song.id]);
+
+  return (
+    <div style={{
+      position: 'fixed', top: 0, right: 0,
+      width: 'var(--panel-w)', height: '100vh',
+      background: 'var(--bg2)', borderLeft: '1px solid var(--border)',
+      transform: open ? 'translateX(0)' : 'translateX(100%)',
+      transition: 'transform 0.35s cubic-bezier(0.22, 1, 0.36, 1)',
+      display: 'flex', flexDirection: 'column', zIndex: 100, overflowY: 'auto',
+    }}>
+      {song && (
+        <>
+          <div style={{ background: 'linear-gradient(135deg, var(--bg3) 60%, rgba(14,13,11,0))', padding: '32px 32px 24px', borderBottom: '1px solid var(--border)', position: 'relative' }}>
+            <button onClick={onClose} style={{ position: 'absolute', top: 20, right: 20, background: 'none', border: '1px solid var(--border)', color: 'var(--text-dim)', fontFamily: 'Space Mono, monospace', fontSize: 11, padding: '4px 10px', cursor: 'pointer', borderRadius: 2 }}>ESC</button>
+            <div style={{ display: 'inline-block', background: genre.color + '22', border: `1px solid ${genre.color}55`, color: genre.color, fontSize: 10, letterSpacing: '0.12em', padding: '3px 10px', borderRadius: 2, fontFamily: 'Space Mono, monospace', textTransform: 'uppercase', marginBottom: 14 }}>{genre.label}</div>
+            <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 700, lineHeight: 1.15, color: 'var(--text)', marginBottom: 6, fontStyle: 'italic' }}>{song.title}</h2>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)', letterSpacing: '0.06em', marginBottom: 12 }}>{song.artist} · {song.year}</div>
+            <div style={{ display: 'flex', gap: 16 }}>
+              <span style={{ fontSize: 10, color: 'var(--text-dimmer)' }}>💿 {song.album}</span>
+              <span style={{ fontSize: 10, color: 'var(--text-dimmer)' }}>⏱ {song.duration}</span>
+            </div>
+          </div>
+
+          <div style={{ padding: '18px 32px', borderBottom: '1px solid var(--border)' }}>
+            <p style={{ fontFamily: "'Playfair Display', serif", fontSize: 14, lineHeight: 1.7, color: 'var(--text-dim)', fontStyle: 'italic' }}>"{song.snippet}"</p>
+          </div>
+
+          <div style={{ padding: '20px 32px', flex: 1 }}>
+            <div style={{ fontSize: 10, letterSpacing: '0.14em', color: 'var(--text-dimmer)', textTransform: 'uppercase', marginBottom: 14 }}>Lletra</div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
+              {stanzas.map((_, i) => (
+                <button key={i} onClick={() => setActiveStanza(i)} style={{ background: activeStanza === i ? genre.color + '22' : 'transparent', border: `1px solid ${activeStanza === i ? genre.color + '88' : 'var(--border)'}`, color: activeStanza === i ? genre.color : 'var(--text-dim)', fontFamily: 'Space Mono, monospace', fontSize: 10, padding: '4px 12px', cursor: 'pointer', borderRadius: 2, transition: 'all 0.15s' }}>{i + 1}</button>
+              ))}
+            </div>
+            <div style={{ borderLeft: `2px solid ${genre.color}`, paddingLeft: 20, marginBottom: 28 }}>
+              <pre style={{ fontFamily: "'Playfair Display', serif", fontSize: 15, lineHeight: 1.9, color: 'var(--text)', whiteSpace: 'pre-wrap', fontStyle: 'italic' }}>{stanzas[activeStanza]}</pre>
+            </div>
+            <div style={{ fontSize: 10, letterSpacing: '0.14em', color: 'var(--text-dimmer)', textTransform: 'uppercase', marginBottom: 12 }}>Lletra completa</div>
+            {stanzas.map((s, i) => (
+              <div key={i} style={{ marginBottom: 18, cursor: 'pointer' }} onClick={() => setActiveStanza(i)}>
+                <pre style={{ fontFamily: "'Playfair Display', serif", fontSize: 13, lineHeight: 1.8, color: i === activeStanza ? 'var(--text)' : 'rgba(232,224,208,0.3)', whiteSpace: 'pre-wrap', fontStyle: 'italic', transition: 'color 0.15s' }}>{s}</pre>
+              </div>
+            ))}
+            <a href={song.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-block', marginTop: 8, fontSize: 10, color: genre.color, letterSpacing: '0.1em', textDecoration: 'none', borderBottom: `1px solid ${genre.color}44`, paddingBottom: 2 }}>Escoltar a Viasona →</a>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── MINIMAP ─────────────────────────────────────────────────────────────
+
+function Minimap({ transform, viewW, viewH, onJump }) {
+  const mmW = 140, mmH = 100;
+  const scaleX = mmW / WORLD_W, scaleY = mmH / WORLD_H;
+  const vpW = (viewW / transform.k) * scaleX;
+  const vpH = (viewH / transform.k) * scaleY;
+  const vpX = (-transform.x / transform.k) * scaleX;
+  const vpY = (-transform.y / transform.k) * scaleY;
+  return (
+    <div style={{ position: 'fixed', bottom: 28, left: 28, background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden', cursor: 'crosshair' }}
+      onClick={e => { const r = e.currentTarget.getBoundingClientRect(); onJump((e.clientX - r.left) / mmW, (e.clientY - r.top) / mmH); }}>
+      <svg width={mmW} height={mmH}>
+        <rect width={mmW} height={mmH} fill="var(--bg)" />
+        {SONGS.map(s => {
+          const x = (PADDING + s.ex * (WORLD_W - PADDING * 2)) * scaleX;
+          const y = (PADDING + (1 - s.ey) * (WORLD_H - PADDING * 2)) * scaleY;
+          return <circle key={s.id} cx={x} cy={y} r={2.5} fill={GENRES[s.genre].color} opacity={0.7} />;
+        })}
+        <rect x={Math.max(0, vpX)} y={Math.max(0, vpY)} width={Math.min(vpW, mmW)} height={Math.min(vpH, mmH)} fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth={1} />
+      </svg>
+    </div>
+  );
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────
+
+function App() {
+  const { w: viewW, h: viewH } = useWindowSize();
+  const svgRef = useRef(null);
+
+  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const { ambiance, nodeForm, palette } = tweaks;
+
+  // Apply palette to CSS vars whenever it changes
+  useEffect(() => { applyPalette(PALETTES[palette] || PALETTES.amber); }, [palette]);
+
+  const pal = PALETTES[palette] || PALETTES.amber;
+  const [transform, setTransform] = useState(() => {
+    const k = Math.max(viewW / WORLD_W, viewH / WORLD_H) * 0.88;
+    return { k, x: (viewW - WORLD_W * k) / 2, y: (viewH - WORLD_H * k) / 2 };
+  });
+  const [selectedSong, setSelectedSong] = useState(null);
+  const [hoveredId, setHoveredId] = useState(null);
+  const [chips, setChips] = useState([]);
+  const [inputVal, setInputVal] = useState('');
+  const [similarTo, setSimilarTo] = useState(null);
+  const isDragging = useRef(false);
+  const dragStart = useRef(null);
+  const lastTransform = useRef(transform);
+
+  useEffect(() => { lastTransform.current = transform; }, [transform]);
+  useEffect(() => {
+    const handle = e => { if (e.key === 'Escape') setSelectedSong(null); };
+    window.addEventListener('keydown', handle);
+    return () => window.removeEventListener('keydown', handle);
+  }, []);
+
+  const filtered = useMemo(() => {
+    // similarity mode overrides chip filters
+    if (similarTo) {
+      const ids = new Set([similarTo, ...(NEIGHBORS[similarTo] || [])]);
+      return SONGS.filter(s => ids.has(s.id)).map(s => s.id);
+    }
+    if (!chips.length) return null;
+    return SONGS.filter(s =>
+      chips.every(chip => {
+        const q = chip.toLowerCase();
+        return s.title.toLowerCase().includes(q) ||
+               s.artist.toLowerCase().includes(q) ||
+               s.genre.includes(q) ||
+               s.album.toLowerCase().includes(q);
+      })
+    ).map(s => s.id);
+  }, [chips, similarTo]);
+
+  // Commit a chip from the input
+  const commitChip = useCallback(() => {
+    const val = inputVal.trim();
+    if (val && !chips.includes(val)) setChips(c => [...c, val]);
+    setInputVal('');
+  }, [inputVal, chips]);
+
+  // Navigate map to a song and select it
+  const navigateToSong = useCallback((song) => {
+    const { x, y } = worldPos(song);
+    const k = 2.2;
+    setTransform({
+      k,
+      x: viewW / 2 - x * k,
+      y: viewH / 2 - y * k,
+    });
+    setSelectedSong(song);
+    setSimilarTo(null);
+  }, [viewW, viewH]);
+
+  // Descobreix: random song → zoom into its similarity neighborhood
+  const descobreix = useCallback(() => {
+    const pick = SONGS[Math.floor(Math.random() * SONGS.length)];
+    const { x, y } = worldPos(pick);
+    const k = 1.6;
+    setTransform({ k, x: viewW / 2 - x * k, y: viewH / 2 - y * k });
+    setSimilarTo(pick.id);
+    setSelectedSong(pick);
+    setChips([]);
+  }, [viewW, viewH]);
+
+  const onMouseDown = useCallback(e => {
+    if (e.button !== 0) return;
+    isDragging.current = false;
+    dragStart.current = { mx: e.clientX, my: e.clientY, tx: lastTransform.current.x, ty: lastTransform.current.y };
+  }, []);
+
+  const onMouseMove = useCallback(e => {
+    if (!dragStart.current) return;
+    const ds = dragStart.current;
+    const dx = e.clientX - ds.mx, dy = e.clientY - ds.my;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) isDragging.current = true;
+    setTransform(t => ({ ...t, x: ds.tx + dx, y: ds.ty + dy }));
+  }, []);
+
+  const onMouseUp = useCallback(() => { dragStart.current = null; }, []);
+
+  const onWheel = useCallback(e => {
+    e.preventDefault();
+    const factor = Math.exp(-e.deltaY * 0.001 * 1.2);
+    const cx = e.clientX, cy = e.clientY;
+    setTransform(t => {
+      const newK = Math.max(0.3, Math.min(5, t.k * factor));
+      const ratio = newK / t.k;
+      return { k: newK, x: cx - (cx - t.x) * ratio, y: cy - (cy - t.y) * ratio };
+    });
+  }, []);
+
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [onWheel]);
+
+  const zoomBy = useCallback(factor => {
+    setTransform(t => {
+      const cx = viewW / 2, cy = viewH / 2;
+      const newK = Math.max(0.3, Math.min(5, t.k * factor));
+      const ratio = newK / t.k;
+      return { k: newK, x: cx - (cx - t.x) * ratio, y: cy - (cy - t.y) * ratio };
+    });
+  }, [viewW, viewH]);
+
+  const onMinimapJump = useCallback((mx, my) => {
+    setTransform(t => ({ ...t, x: viewW / 2 - mx * WORLD_W * t.k, y: viewH / 2 - my * WORLD_H * t.k }));
+  }, [viewW, viewH]);
+
+  const onNodeClick = useCallback(song => {
+    if (!isDragging.current) setSelectedSong(song);
+  }, []);
+
+  const panelOpen = !!selectedSong;
+
+  return (
+    <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative', background: 'var(--bg)' }}>
+      <svg ref={svgRef} width={viewW} height={viewH}
+        style={{ display: 'block', cursor: 'grab', userSelect: 'none' }}
+        onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
+        <defs>
+          <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse"
+            patternTransform={`translate(${transform.x % (60 * transform.k)},${transform.y % (60 * transform.k)}) scale(${transform.k})`}>
+            <circle cx="30" cy="30" r="1" fill="rgba(255,255,255,0.04)" />
+          </pattern>
+          <radialGradient id={`bg-grad-${palette}`} cx="50%" cy="50%" r="70%">
+            <stop offset="0%" stopColor={pal.grad0} />
+            <stop offset="100%" stopColor={pal.grad1} />
+          </radialGradient>
+        </defs>
+        <rect width={viewW} height={viewH} fill={`url(#bg-grad-${palette})`} />
+        <rect width={viewW} height={viewH} fill="url(#grid)" />
+        <g transform={`translate(${transform.x},${transform.y}) scale(${transform.k})`}>
+          <Stars width={WORLD_W} height={WORLD_H} ambiance={ambiance} palette={palette} />
+          <ClusterZones ambiance={ambiance} />
+          <AxisLabels />
+          {SONGS.map(song => {
+            const dimmed = filtered && !filtered.includes(song.id);
+            return (
+              <g key={song.id} opacity={dimmed ? 0.18 : 1} style={{ transition: 'opacity 0.2s' }}>
+                <SongNode song={song} selected={selectedSong?.id === song.id} hovered={hoveredId === song.id}
+                  onHover={setHoveredId} onClick={onNodeClick} scale={transform.k} nodeForm={nodeForm} ambiance={ambiance} />
+              </g>
+            );
+          })}
+        </g>
+      </svg>
+
+      {/* TOP BAR */}
+      <div style={{ position: 'fixed', top: 0, left: 0, right: panelOpen ? 'var(--panel-w)' : 0, padding: '18px 28px', display: 'flex', alignItems: 'center', gap: 24, background: 'linear-gradient(to bottom, rgba(14,13,11,0.92) 60%, transparent)', transition: 'right 0.35s cubic-bezier(0.22,1,0.36,1)', zIndex: 50, pointerEvents: 'none' }}>
+        <div style={{ pointerEvents: 'auto' }}>
+          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, fontWeight: 700, fontStyle: 'italic', color: 'var(--amber)', lineHeight: 1 }}>Cançoner</div>
+          <div style={{ fontSize: 9, letterSpacing: '0.2em', color: 'var(--text-dimmer)', textTransform: 'uppercase', marginTop: 2 }}>Mapa semàntic de cançons catalanes</div>
+        </div>
+        <div style={{ flex: 1, maxWidth: 340, pointerEvents: 'auto', position: 'relative' }}>
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Cerca per títol, artista, gènere…"
+            style={{ width: '100%', background: 'rgba(14,13,11,0.85)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text)', fontFamily: 'Space Mono, monospace', fontSize: 11, padding: '9px 14px 9px 34px', outline: 'none', backdropFilter: 'blur(6px)' }} />
+          <svg style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', opacity: 0.35 }} width={14} height={14} viewBox="0 0 16 16" fill="none">
+            <circle cx="6.5" cy="6.5" r="5" stroke="currentColor" strokeWidth="1.5" />
+            <line x1="10.5" y1="10.5" x2="14" y2="14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+          {query && <span style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 10, color: 'var(--text-dimmer)', cursor: 'pointer' }} onClick={() => setQuery('')}>✕</span>}
+        </div>
+      </div>
+
+      {/* LEGEND */}
+      <div style={{ position: 'fixed', top: 80, left: 28, display: 'flex', flexDirection: 'column', gap: 8, zIndex: 50 }}>
+        {Object.entries(GENRES).map(([key, g]) => (
+          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: g.color }} />
+            <span style={{ fontSize: 10, color: 'var(--text-dimmer)', letterSpacing: '0.06em' }}>{g.label}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* ZOOM CONTROLS */}
+      <div style={{ position: 'fixed', bottom: 28, right: panelOpen ? 'calc(var(--panel-w) + 28px)' : 28, display: 'flex', flexDirection: 'column', gap: 4, transition: 'right 0.35s cubic-bezier(0.22,1,0.36,1)', zIndex: 50 }}>
+        {['+', '−', '⊡'].map((icon, i) => (
+          <button key={i} onClick={() => {
+            if (i === 0) zoomBy(1.3);
+            else if (i === 1) zoomBy(1 / 1.3);
+            else { const k = Math.max(viewW / WORLD_W, viewH / WORLD_H) * 0.88; setTransform({ k, x: (viewW - WORLD_W * k) / 2, y: (viewH - WORLD_H * k) / 2 }); }
+          }} style={{ width: 34, height: 34, background: 'var(--bg2)', border: '1px solid var(--border)', color: 'var(--text-dim)', fontSize: i < 2 ? 18 : 14, cursor: 'pointer', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Space Mono, monospace' }}>{icon}</button>
+        ))}
+      </div>
+
+      {/* SONG COUNT */}
+      <div style={{ position: 'fixed', bottom: 28, left: '50%', transform: 'translateX(-50%)', fontSize: 10, color: 'var(--text-dimmer)', letterSpacing: '0.14em', textTransform: 'uppercase', zIndex: 50 }}>
+        {filtered ? `${filtered.length} / ${SONGS.length} cançons` : `${SONGS.length} cançons`}
+      </div>
+
+      <Minimap transform={transform} viewW={viewW} viewH={viewH} onJump={onMinimapJump} />
+      <DetailPanel song={selectedSong} onClose={() => setSelectedSong(null)} />
+      {panelOpen && <div style={{ position: 'fixed', inset: 0, zIndex: 90 }} onClick={() => setSelectedSong(null)} />}
+
+      <TweaksPanel tweaks={tweaks} setTweaks={setTweak}>
+        <TweakSection label="Ambiance">
+          <TweakSlider label="Void → Nebula" value={ambiance} min={0} max={100} step={1} onChange={v => setTweak('ambiance', v)} />
+        </TweakSection>
+        <TweakSection label="Node Form">
+          <TweakRadio label="Style" value={nodeForm} options={[
+            { value: 'dot',   label: 'Dot'   },
+            { value: 'ring',  label: 'Ring'  },
+            { value: 'pulse', label: 'Pulse' },
+          ]} onChange={v => setTweak('nodeForm', v)} />
+        </TweakSection>
+        <TweakSection label="Palette">
+          <TweakRadio label="Theme" value={palette} options={[
+            { value: 'amber',  label: 'Amber'  },
+            { value: 'cobalt', label: 'Cobalt' },
+            { value: 'sepia',  label: 'Sépia'  },
+          ]} onChange={v => setTweak('palette', v)} />
+        </TweakSection>
+      </TweaksPanel>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

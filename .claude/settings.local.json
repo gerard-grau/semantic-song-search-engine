@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(npx vite:*)",
+      "Bash(grep -E \"\\\\.\\(css|jsx\\)$\")"
+    ]
+  }
+}

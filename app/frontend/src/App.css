@@ -35,6 +35,13 @@
   margin-bottom: 36px;
 }
 
+.welcome-buttons {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
 .welcome-btn {
   padding: 16px 48px;
   font-size: 1.15rem;
@@ -51,6 +58,18 @@
 .welcome-btn:hover {
   background: var(--accent-hover);
   transform: translateY(-2px);
+}
+
+.welcome-btn--secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 2px solid var(--accent);
+  box-shadow: none;
+}
+[data-theme="dark"] .welcome-btn--secondary { box-shadow: none; }
+.welcome-btn--secondary:hover {
+  background: var(--accent);
+  color: #fff;
 }
 
 .welcome-bg {
@@ -113,6 +132,31 @@
   position: static;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-home-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.header-home-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 .header-title {
   font-size: 2.2rem;
   font-weight: 800;
@@ -130,30 +174,90 @@
    SEARCH BAR (sits above viz, in the right panel header)
    ================================================================ */
 
-.search-bar {
+/* ================================================================
+   FILTER BAR (chip-based)
+   ================================================================ */
+
+.filter-bar {
   display: flex;
   gap: 8px;
   flex: 1;
+  align-items: center;
 }
 
-.search-bar input {
+.filter-chips-input {
   flex: 1;
-  padding: 12px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
   border-radius: 8px;
   border: 1.5px solid var(--border);
   background: var(--bg-card);
-  color: var(--text-primary);
-  font-size: 0.95rem;
-  outline: none;
+  min-height: 42px;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
-.search-bar input:focus {
+.filter-chips-input:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
-.search-bar input::placeholder { color: var(--text-muted); }
 
-.search-bar button {
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 16px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  animation: chipIn 0.2s ease-out;
+}
+
+@keyframes chipIn {
+  from { opacity: 0; transform: scale(0.8); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.filter-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.25);
+  border: none;
+  color: #fff;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s;
+}
+.filter-chip-remove:hover {
+  background: rgba(255,255,255,0.45);
+}
+
+.filter-input {
+  flex: 1;
+  min-width: 120px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  outline: none;
+  padding: 4px 0;
+}
+.filter-input::placeholder {
+  color: var(--text-muted);
+}
+
+.filter-bar button.btn-search,
+.filter-bar button.btn-reset {
   padding: 11px 20px;
   border-radius: 8px;
   border: none;
@@ -161,9 +265,10 @@
   font-size: 0.9rem;
   cursor: pointer;
   transition: background 0.2s, transform 0.1s;
+  flex-shrink: 0;
 }
-.search-bar button:active { transform: scale(0.97); }
-.search-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+.filter-bar button:active { transform: scale(0.97); }
+.filter-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-search {
   background: var(--accent);
@@ -900,4 +1005,367 @@
   .viz-selector-btn { padding: 5px 10px; font-size: 0.72rem; }
   .showcase { padding: 16px; }
   .showcase-card { padding: 14px; gap: 12px; }
+}
+
+/* ================================================================
+   CERCADOR PAGE — Viasona-style instant search
+   ================================================================ */
+
+.cercador-page {
+  min-height: 100vh;
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 80px;
+  position: relative;
+}
+
+.cercador-nav {
+  position: absolute;
+  top: 20px;
+  left: 24px;
+  right: 24px;
+  display: flex;
+  justify-content: space-between;
+  z-index: 10;
+}
+
+.cercador-nav-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+.cercador-nav-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.cercador-nav-btn--accent {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.cercador-nav-btn--accent:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.cercador-container {
+  width: 100%;
+  max-width: 740px;
+  padding: 0 24px;
+}
+
+.cercador-title {
+  font-size: 2.4rem;
+  font-weight: 800;
+  color: var(--accent);
+  text-align: center;
+  margin-bottom: 32px;
+  letter-spacing: -0.02em;
+}
+
+.cercador-search-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.cercador-input-row {
+  display: flex;
+  align-items: center;
+  background: var(--bg-card);
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  padding: 0 16px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.cercador-input-row:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.cercador-icon {
+  font-size: 1.2rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-right: 10px;
+}
+
+.cercador-input {
+  flex: 1;
+  padding: 16px 0;
+  border: none;
+  background: transparent;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  outline: none;
+  font-family: inherit;
+}
+.cercador-input::placeholder {
+  color: var(--text-muted);
+}
+
+.cercador-clear {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+.cercador-clear:hover {
+  color: var(--text-primary);
+}
+
+/* Dropdown */
+.cercador-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  max-height: 70vh;
+  overflow-y: auto;
+  z-index: 50;
+  animation: cercadorSlideIn 0.15s ease-out;
+}
+
+@keyframes cercadorSlideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.cercador-loading,
+.cercador-empty {
+  padding: 20px 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.cercador-correction {
+  padding: 12px 24px;
+  background: var(--accent-light);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+}
+.cercador-correction strong {
+  color: var(--accent);
+}
+
+.cercador-correction-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.92rem;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  padding: 0;
+  font-family: inherit;
+  transition: color 0.15s;
+}
+.cercador-correction-btn:hover {
+  color: var(--accent-hover);
+  text-decoration-style: solid;
+}
+
+.cercador-suggestion-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.88rem;
+  text-decoration: underline;
+  padding: 0;
+  font-family: inherit;
+}
+.cercador-suggestion-btn:hover {
+  color: var(--accent-hover);
+}
+
+/* Results: single column by default, two-col when modifier class present */
+.cercador-results {
+  display: flex;
+  flex-direction: column;
+}
+
+.cercador-results--two-col {
+  flex-direction: row;
+}
+
+.cercador-results--two-col > .cercador-section--grups {
+  width: 38%;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: none;
+}
+
+.cercador-results--two-col > .cercador-right-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.cercador-right-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.cercador-section {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.cercador-section:last-child,
+.cercador-right-col .cercador-section:last-child {
+  border-bottom: none;
+}
+
+.cercador-section-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0 20px 8px;
+  margin: 0;
+}
+
+.cercador-item {
+  padding: 10px 20px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.cercador-item:hover {
+  background: var(--card-hover);
+}
+
+.cercador-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Grups */
+.cercador-grup-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.cercador-grup-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  display: block;
+  margin-top: 2px;
+}
+
+/* Songs */
+.cercador-song-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.cercador-genre-tag {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.cercador-song-sub {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.cercador-song-snippet {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+/* Noticies */
+.cercador-noticia-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.cercador-noticia-date {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  display: block;
+  margin-top: 2px;
+}
+
+.cercador-more {
+  padding: 10px 20px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cercador-more:hover {
+  color: var(--accent);
+}
+
+/* Highlight */
+.cerca-highlight {
+  background: rgba(34, 184, 207, 0.25);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+[data-theme="light"] .cerca-highlight {
+  background: rgba(211, 84, 0, 0.15);
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .cercador-results--two-col {
+    flex-direction: column;
+  }
+  .cercador-results--two-col > .cercador-section--grups {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .cercador-title {
+    font-size: 1.8rem;
+  }
+  .cercador-page {
+    padding-top: 60px;
+  }
+  .cercador-nav {
+    top: 12px;
+    left: 12px;
+    right: 12px;
+  }
 }

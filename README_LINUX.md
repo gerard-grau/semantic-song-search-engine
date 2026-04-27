@@ -27,6 +27,9 @@ pip install -r requirements.txt
 
 ```bash
 uvicorn app.backend.api.main:app --reload --host 127.0.0.1 --port 8000
+
+python -m uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000
+
 ```
 
 El backend estarà a `http://127.0.0.1:8000`. Swagger UI a `http://127.0.0.1:8000/docs`.
