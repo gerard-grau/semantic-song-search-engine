@@ -1,13 +1,13 @@
 """
 Embedding and similarity module — progressive filtering.
 
-Encodes queries via core/encoder.py (which is the single place to edit when
-switching models or passage formats).  Songs must already carry an 'embedding'
-field whose dimension matches encoder.MODEL_DIM.
+Encodes queries via core/encoder.py (the single place to edit when switching
+models or passage formats).  Songs must already carry an 'embedding' field
+whose dimension matches encoder.MODEL_DIM.
 
-If the song embeddings are a different dimension (e.g. the 32-dim mock data),
-filter_embeddings falls back to a word-overlap scorer so the dev environment
-still works before real embeddings are generated.
+If a dimension mismatch is ever detected (e.g. an outdated parquet was loaded
+against a newer encoder), filter_embeddings falls back to a word-overlap
+scorer so the API stays responsive while you regenerate embeddings.
 """
 
 from __future__ import annotations
@@ -17,6 +17,11 @@ import logging
 import numpy as np
 
 from app.backend.core.encoder import encode_query
+from app.backend.core.similarity import (
+    cosine_vector,
+    l2_normalize_matrix,
+    l2_normalize_vector,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +61,10 @@ def filter_embeddings(query_text: str, songs: list[dict]) -> list[dict]:
 
     Fallback (dimension mismatch)
     -----------------------------
-    When the song embedding dimension does not match the model output (e.g.
-    the 32-dim mock data), falls back to word-overlap scoring so the dev
-    environment still works before real embeddings are generated.
+    If the stored song embedding dimension does not match the encoder output
+    (i.e. embeddings were produced with a different model), falls back to
+    word-overlap scoring so the API still returns sensible results while the
+    parquet is regenerated.
 
     Args:
         query_text: The user's search query.
@@ -96,12 +102,7 @@ def filter_embeddings(query_text: str, songs: list[dict]) -> list[dict]:
 
     # ── Cosine similarity for every song ─────────────────────────────
     song_matrix = np.array([s["embedding"] for s in songs], dtype=np.float64)
-    norms = np.linalg.norm(song_matrix, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1.0, norms)
-    song_matrix_normed = song_matrix / norms
-
-    query_normed = query_emb / q_norm
-    raw_scores = song_matrix_normed @ query_normed  # (n,) in [-1, 1]
+    raw_scores = cosine_vector(query_emb, song_matrix)  # (n,) in [-1, 1]
 
     # ── Min-max normalise so scores use the full [0, 1] range ────────
     # Embedding scores for similar-domain content (e.g. all Catalan pop songs)
@@ -136,8 +137,9 @@ def _word_overlap_filter(query_text: str, songs: list[dict]) -> list[dict]:
     """
     Word-overlap scorer used when embedding dimensions don't match.
 
-    Scores each song by the fraction of query words found in its text fields.
-    Applies the same median threshold as the real filter.
+    Scores each song by the fraction of query words found in its text
+    fields, then keeps every song with score ≥ median. Always returns at
+    least one survivor (the highest-scoring song).
     """
     words = set(query_text.lower().split())
     scored = []
@@ -220,25 +222,25 @@ def build_neighborhood(
     if bridge_song_ids and bridge_count > 0:
         focal_song_data = id_to_song.get(focal_id)
         if focal_song_data:
-            focal_emb = np.array(focal_song_data["embedding"], dtype=np.float64)
-            focal_norm = np.linalg.norm(focal_emb) or 1.0
-
-            candidates: list[tuple[float, dict]] = []
+            bridge_pool: list[dict] = []
             for bid in bridge_song_ids:
                 if bid in neighborhood_ids:
                     continue
                 b_song = id_to_song.get(bid)
-                if not b_song:
-                    continue
-                emb = np.array(b_song["embedding"], dtype=np.float64)
-                norm = np.linalg.norm(emb)
-                sim = float(np.dot(focal_emb, emb) / (focal_norm * norm)) if norm > 0 else 0.0
-                candidates.append((sim, b_song))
+                if b_song is not None:
+                    bridge_pool.append(b_song)
 
-            candidates.sort(key=lambda x: x[0], reverse=True)
-            for _, b_song in candidates[:bridge_count]:
-                result.append({**b_song, "score": 0.0, "role": "bridge"})
-                neighborhood_ids.add(b_song["id"])
+            if bridge_pool:
+                focal_emb = np.array(focal_song_data["embedding"], dtype=np.float64)
+                bridge_matrix = np.array(
+                    [b["embedding"] for b in bridge_pool], dtype=np.float64
+                )
+                sims = cosine_vector(focal_emb, bridge_matrix)
+                order = np.argsort(-sims)[:bridge_count]
+                for idx in order:
+                    b_song = bridge_pool[int(idx)]
+                    result.append({**b_song, "score": 0.0, "role": "bridge"})
+                    neighborhood_ids.add(b_song["id"])
 
     return result
 
@@ -259,23 +261,18 @@ def get_nearest_neighbors(focal_id: int, songs: list[dict], n: int = 20) -> list
         List of song dicts with an added 'score' field (cosine similarity).
         Always contains at least the focal song if it exists.
     """
-    focal_song = next((s for s in songs if s["id"] == focal_id), None)
-    if focal_song is None:
+    focal_idx = next((i for i, s in enumerate(songs) if s["id"] == focal_id), None)
+    if focal_idx is None:
         return []
+    focal_song = songs[focal_idx]
 
-    focal_emb = np.array(focal_song["embedding"], dtype=np.float64)
-    focal_norm = np.linalg.norm(focal_emb)
-    if focal_norm == 0:
-        focal_norm = 1.0
+    matrix = np.array([s["embedding"] for s in songs], dtype=np.float64)
+    sims = cosine_vector(matrix[focal_idx], matrix)
 
-    scored: list[dict] = []
-    for song in songs:
-        if song["id"] == focal_id:
-            continue
-        emb = np.array(song["embedding"], dtype=np.float64)
-        norm = np.linalg.norm(emb)
-        sim = float(np.dot(focal_emb, emb) / (focal_norm * norm)) if norm > 0 else 0.0
-        scored.append({**song, "score": round(sim, 4)})
-
+    scored = [
+        {**song, "score": round(float(sims[i]), 4)}
+        for i, song in enumerate(songs)
+        if i != focal_idx
+    ]
     scored.sort(key=lambda s: s["score"], reverse=True)
     return [{**focal_song, "score": 1.0}] + scored[:n]

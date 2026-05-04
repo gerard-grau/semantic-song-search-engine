@@ -15,7 +15,8 @@ from pathlib import Path
 import numpy as np
 from sklearn.manifold import MDS, TSNE
 
-from app.backend.core.data_loader import load_all_songs
+from app.backend.core.data_loader import attach_embeddings, load_visible_songs
+from app.backend.core.similarity import cosine_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -120,13 +121,19 @@ def compute_tsne_3d(songs: list[dict]) -> list[dict]:
 
 
 def _load_precomputed_2d() -> list[dict]:
-    """Load 2D positions from embedded_songs_2d.parquet and attach song metadata."""
+    """
+    Load 2D positions from embedded_songs_2d.parquet and attach song metadata.
+
+    Only the IDs present in the parquet are kept — that file is the canonical
+    visible set. Songs missing from the parquet are silently dropped so the
+    visualization shows exactly the points that were projected.
+    """
     import pyarrow.parquet as pq
 
     table = pq.read_table(_PRECOMP_2D, columns=["id_lyrics", "x", "y"])
     df = table.to_pandas()
 
-    id_to_song = {s["id"]: s for s in load_all_songs()}
+    id_to_song = {s["id"]: s for s in load_visible_songs()}
 
     points: list[dict] = []
     for _, row in df.iterrows():
@@ -148,32 +155,52 @@ def _load_precomputed_2d() -> list[dict]:
 
 def get_all_projections_2d() -> list[dict]:
     """
-    Get cached 2D projections for ALL songs.
-    Loads from pre-computed parquet if available, otherwise computes t-SNE.
+    Cached 2D projections for the visible songs.
+
+    The pre-computed parquet is the source of truth: whatever IDs it contains
+    are exactly the songs the visualization will display. If the parquet is
+    missing, returns an empty list (the API consumer is responsible for
+    handling the empty state — typically by asking the user to run
+    ``app.backend.core.data_pipeline``).
     """
     global _cached_all_2d
     if _cached_all_2d is None:
-        if _PRECOMP_2D.exists():
+        if not _PRECOMP_2D.exists():
+            logger.warning(
+                "No 2D parquet at %s. Run `python -m app.backend.core.data_pipeline` "
+                "to generate the visualization data.",
+                _PRECOMP_2D,
+            )
+            _cached_all_2d = []
+        else:
             try:
                 _cached_all_2d = _load_precomputed_2d()
                 logger.info("Loaded %d pre-computed 2D projections", len(_cached_all_2d))
             except Exception as exc:
-                logger.warning("Could not load pre-computed 2D (%s), computing t-SNE", exc)
-                _cached_all_2d = compute_tsne_2d(load_all_songs())
-        else:
-            logger.info("No pre-computed 2D parquet found — computing t-SNE on all songs")
-            _cached_all_2d = compute_tsne_2d(load_all_songs())
+                logger.error("Could not load 2D parquet (%s)", exc)
+                _cached_all_2d = []
     return _cached_all_2d
+
+
+def get_visible_song_ids() -> set[int]:
+    """IDs of every song that currently has a 2D projection."""
+    return {p["id"] for p in get_all_projections_2d()}
 
 
 def get_all_projections_3d() -> list[dict]:
     """
-    Get cached 3D projections for ALL songs.
-    Computes t-SNE on first call, then returns the cache.
+    Cached 3D projections for the visible songs only — i.e. exactly the IDs
+    present in the 2D parquet, so 2D and 3D scatter plots stay aligned.
+    Loads embeddings lazily for just the visible subset.
     """
     global _cached_all_3d
     if _cached_all_3d is None:
-        _cached_all_3d = compute_tsne_3d(load_all_songs())
+        songs = load_visible_songs()
+        if not songs:
+            _cached_all_3d = []
+        else:
+            attach_embeddings(songs)
+            _cached_all_3d = compute_tsne_3d(songs)
     return _cached_all_3d
 
 
@@ -220,11 +247,7 @@ def compute_neighborhood_2d(
 
     # ── 1. Cosine distance matrix ────────────────────────────────────
     matrix = _songs_to_matrix(songs)
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1.0, norms)
-    normed = matrix / norms
-    cos_sim = np.clip(normed @ normed.T, -1.0, 1.0)
-    dist_mat = (1.0 - cos_sim).astype(np.float64)
+    dist_mat = (1.0 - cosine_matrix(matrix)).astype(np.float64)
     np.fill_diagonal(dist_mat, 0.0)
 
     # ── 2. Metric MDS ────────────────────────────────────────────────

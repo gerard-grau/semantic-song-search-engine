@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import math
+import unicodedata
 from pathlib import Path
 
 import pandas as pd
@@ -13,22 +15,18 @@ from app.backend.core.data_loader import load_all_songs
 logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_NOTICIES = _DATA_DIR / "noticies.csv"
+_GRUPS    = _DATA_DIR / "grups.csv"
 
 
 def _safe_str(val) -> str:
     """Return empty string for None/NaN/empty, otherwise strip the value."""
     if val is None:
         return ""
-    try:
-        import math
-        if isinstance(val, float) and math.isnan(val):
-            return ""
-    except (TypeError, ValueError):
-        pass
+    if isinstance(val, float) and math.isnan(val):
+        return ""
     s = str(val).strip()
     return "" if s in ("nan", "NaN", "None") else s
-_NOTICIES   = _DATA_DIR / "noticies.csv"
-_GRUPS      = _DATA_DIR / "grups.csv"
 
 # ---------------------------------------------------------------------------
 # Lazy-loaded singletons
@@ -132,7 +130,6 @@ def _get_parser():
 # ---------------------------------------------------------------------------
 
 def _normalize_for_match(text: str) -> str:
-    import unicodedata
     nfkd = unicodedata.normalize("NFKD", text.lower())
     return "".join(c for c in nfkd if not unicodedata.combining(c)).replace("·", "")
 

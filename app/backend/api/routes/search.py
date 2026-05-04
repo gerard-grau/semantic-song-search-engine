@@ -15,7 +15,12 @@ from app.backend.api.schemas import (
     SongDetail,
     SongResult,
 )
-from app.backend.core.data_loader import get_song_by_id, get_songs_by_ids, load_all_songs
+from app.backend.core.data_loader import (
+    attach_embeddings,
+    get_song_by_id,
+    get_songs_by_ids,
+    load_visible_songs,
+)
 from app.backend.core.embeddings import build_neighborhood, filter_embeddings
 from app.backend.core.projections import (
     compute_neighborhood_2d,
@@ -47,10 +52,11 @@ def _to_result(song: dict) -> SongResult:
 @router.get("/songs", response_model=AllSongsResponse)
 def get_all_songs():
     """
-    Return all songs with cached full-dataset t-SNE projections.
-    Used on initial page load and when the user presses "Reset".
+    Return only the songs that have a 2D projection, plus their cached
+    2D/3D coordinates. No embeddings are loaded for this call — the
+    response is purely metadata + coordinates.
     """
-    songs = load_all_songs()
+    songs = load_visible_songs()
     return AllSongsResponse(
         songs=[_to_result(s) for s in songs],
         projections_2d=[Point2D(**p) for p in get_all_projections_2d()],
@@ -65,22 +71,19 @@ def get_all_songs():
 @router.post("/filter", response_model=FilterResponse)
 def filter_songs(body: FilterRequest):
     """
-    Progressive filter.
-
-    1. If song_ids is provided, restrict to those songs; otherwise use all.
-    2. Apply filter_embeddings(query, songs) → survivors with scores.
-    3. Re-compute t-SNE 2D & 3D on the survivors.
-    4. If ≤ 5 survivors → include a special message.
+    Progressive filter. Embeddings are loaded lazily only for the candidate
+    set (visible songs or whatever subset the client provides).
     """
     if body.song_ids is not None:
         songs = get_songs_by_ids(body.song_ids)
     else:
-        songs = load_all_songs()
+        songs = load_visible_songs()
+
+    attach_embeddings(songs)
 
     survivors = filter_embeddings(query_text=body.query, songs=songs)
     n = len(survivors)
 
-    # Compute fresh t-SNE on the surviving subset
     proj_2d = compute_tsne_2d(survivors)
     proj_3d = compute_tsne_3d(survivors)
 
@@ -104,19 +107,16 @@ def filter_songs(body: FilterRequest):
 def get_song_neighbors(body: NeighborsRequest):
     """
     Return the neighborhood of a focal song for graph-style exploration.
-
-    - Finds N nearest neighbors by cosine similarity.
-    - Always includes the previous focal song (role="previous").
-    - Injects the most similar bridge songs from the previous neighborhood
-      (role="bridge") to anchor the layout and provide visual continuity.
-    - Projects with metric MDS on cosine distances; focal is always centred.
-    - Rotates the plane so the previous focal appears in the travel direction.
+    Embeddings for the candidate set are loaded lazily.
     """
     all_songs = (
         get_songs_by_ids(body.song_ids)
         if body.song_ids is not None
-        else load_all_songs()
+        else load_visible_songs()
     )
+
+    attach_embeddings(all_songs)
+
     neighborhood = build_neighborhood(
         focal_id=body.song_id,
         all_songs=all_songs,
@@ -128,7 +128,6 @@ def get_song_neighbors(body: NeighborsRequest):
     if not neighborhood:
         raise HTTPException(status_code=404, detail=f"Song {body.song_id} not found")
 
-    # Build previous-position lookup for angle-preserving rotation
     prev_pos: dict[int, tuple[float, float]] | None = None
     if body.previous_positions:
         prev_pos = {p.id: (p.x, p.y) for p in body.previous_positions}

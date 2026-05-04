@@ -1,9 +1,9 @@
 """
 Embedding model configuration — edit this file when switching models.
 
-After changing MODEL_NAME / PASSAGE_PREFIX or build_song_passage(), re-run:
-    .venv/bin/python scripts/reembed_mock_songs.py
-to regenerate the stored song embeddings.
+After changing MODEL_NAME / PASSAGE_PREFIX or build_song_passage(), regenerate
+the song embeddings parquet (app/backend/data/embedded_songs.parquet) with the
+embedding pipeline.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def build_song_passage(song: dict) -> str:
     Text fed to the encoder when embedding a song.
 
     Change this if you want to use different fields or a different format.
-    Re-run scripts/reembed_mock_songs.py after any change here.
+    Re-run the embedding pipeline after any change here.
     """
     title   = song.get("title",          "").strip()
     artist  = song.get("artist",         "").strip()
@@ -93,7 +93,6 @@ def encode_passages(texts: list[str], batch_size: int = 16) -> list[list[float]]
     """
     Encode a list of passage strings in batches.
 
-    Used by scripts/reembed_mock_songs.py.
     Returns a list of L2-normalised MODEL_DIM vectors.
     """
     tokenizer, model, device = load_encoder()
