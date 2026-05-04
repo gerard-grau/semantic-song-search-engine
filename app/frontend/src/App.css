@@ -1323,6 +1323,29 @@
   margin-top: 2px;
 }
 
+.cercador-noticia-snippet {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin: 3px 0 2px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cercador-external-icon {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-left: 4px;
+  opacity: 0.7;
+  text-decoration: none;
+}
+.cercador-item:hover .cercador-external-icon {
+  opacity: 1;
+  color: var(--accent);
+}
+
 .cercador-more {
   padding: 10px 20px;
   font-size: 0.8rem;

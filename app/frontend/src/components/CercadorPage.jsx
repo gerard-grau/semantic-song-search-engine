@@ -178,19 +178,27 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                     <div className="cercador-section cercador-section--grups">
                       <h3 className="cercador-section-title">GRUPS</h3>
                       {grups.map((g, i) => (
-                        <div key={i} className="cercador-item cercador-item--grup">
+                        <a
+                          key={i}
+                          className="cercador-item cercador-item--grup"
+                          href={g.viasona_link || undefined}
+                          target={g.viasona_link ? '_blank' : undefined}
+                          rel="noopener noreferrer"
+                          style={{ textDecoration: 'none', display: 'block', cursor: g.viasona_link ? 'pointer' : 'default' }}
+                        >
                           <div className="cercador-item-main">
                             <span className="cercador-grup-name">
                               {highlightText(g.name, highlightTerms)}
                             </span>
+                            {g.viasona_link && (
+                              <span className="cercador-external-icon">↗</span>
+                            )}
                           </div>
                           <span className="cercador-grup-meta">
-                            {g.song_count} {g.song_count === 1 ? 'canco' : 'cancons'}
-                            {g.genres?.length > 0 && (
-                              <> · {g.genres.join(', ')}</>
-                            )}
+                            {g.song_count} {g.song_count === 1 ? 'cançó' : 'cançons'}
+                            {g.municipi && <> · {g.municipi}</>}
                           </span>
-                        </div>
+                        </a>
                       ))}
                       {grups.length >= 5 && (
                         <div className="cercador-more">Veure'n mes resultats →</div>
@@ -223,6 +231,15 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                                     {s.genre}
                                   </span>
                                 )}
+                                {s.url && (
+                                  <a
+                                    href={s.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="cercador-external-icon"
+                                    onClick={e => e.stopPropagation()}
+                                  >↗</a>
+                                )}
                               </div>
                               <div className="cercador-song-sub">
                                 {highlightText(s.artist, highlightTerms)}
@@ -245,14 +262,29 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                         <div className="cercador-section">
                           <h3 className="cercador-section-title">NOTICIES</h3>
                           {noticies.map((n) => (
-                            <div key={n.id} className="cercador-item cercador-item--noticia">
+                            <a
+                              key={n.id}
+                              className="cercador-item cercador-item--noticia"
+                              href={n.viasona_link || undefined}
+                              target={n.viasona_link ? '_blank' : undefined}
+                              rel="noopener noreferrer"
+                              style={{ textDecoration: 'none', display: 'block', cursor: n.viasona_link ? 'pointer' : 'default' }}
+                            >
                               <div className="cercador-item-main">
                                 <span className="cercador-noticia-title">
                                   {highlightText(n.title, highlightTerms)}
                                 </span>
+                                {n.viasona_link && (
+                                  <span className="cercador-external-icon">↗</span>
+                                )}
                               </div>
+                              {n.snippet && (
+                                <div className="cercador-noticia-snippet">
+                                  {highlightText(n.snippet, highlightTerms)}
+                                </div>
+                              )}
                               <span className="cercador-noticia-date">{n.date}</span>
-                            </div>
+                            </a>
                           ))}
                           {noticies.length >= 5 && (
                             <div className="cercador-more">Veure'n mes resultats →</div>

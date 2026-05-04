@@ -64,3 +64,4 @@ app/backend/data/noticies.csv
 app/backend/data/grups.csv
 app/backend/data/cancons.csv
 app/backend/data/augmented_songs.csv
+app/backend/data/embedded_songs.parquet

@@ -31,12 +31,12 @@ router = APIRouter(prefix="/api")
 def _to_result(song: dict) -> SongResult:
     return SongResult(
         id=song["id"],
-        title=song["title"],
-        artist=song["artist"],
-        album=song["album"],
-        genre=song["genre"],
-        year=song["year"],
-        lyrics_snippet=song["lyrics_snippet"],
+        title=song.get("title", ""),
+        artist=song.get("artist", ""),
+        album=song.get("album", ""),
+        genre=song.get("genre", ""),
+        year=song.get("year", 0),
+        lyrics_snippet=song.get("lyrics_snippet", ""),
         score=song.get("score", 0.0),
     )
 
@@ -159,12 +159,12 @@ def get_song(song_id: int):
         raise HTTPException(status_code=404, detail=f"Song {song_id} not found")
     return SongDetail(
         id=song["id"],
-        title=song["title"],
-        artist=song["artist"],
-        album=song["album"],
-        genre=song["genre"],
-        year=song["year"],
-        lyrics_snippet=song["lyrics_snippet"],
+        title=song.get("title", ""),
+        artist=song.get("artist", ""),
+        album=song.get("album", ""),
+        genre=song.get("genre", ""),
+        year=song.get("year", 0),
+        lyrics_snippet=song.get("lyrics_snippet", ""),
         full_lyrics=song.get("full_lyrics", ""),
         url=song.get("url"),
         duration=song.get("duration"),

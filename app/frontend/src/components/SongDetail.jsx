@@ -32,11 +32,13 @@ export default function SongDetail({ songId, onClose }) {
             </div>
 
             <div className="modal-meta">
-              <span className="modal-tag" style={{ background: GENRE_COLORS[song.genre] || '#888' }}>
-                {song.genre}
-              </span>
-              <span>{song.album}</span>
-              <span>{song.year}</span>
+              {song.genre && (
+                <span className="modal-tag" style={{ background: GENRE_COLORS[song.genre] || '#888' }}>
+                  {song.genre}
+                </span>
+              )}
+              {song.album && <span>{song.album}</span>}
+              {song.year > 0 && <span>{song.year}</span>}
               {song.duration && <span>{song.duration}</span>}
               {song.language && <span>{song.language}</span>}
             </div>

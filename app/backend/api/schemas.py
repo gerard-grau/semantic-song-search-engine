@@ -9,10 +9,10 @@ class SongResult(BaseModel):
     id: int
     title: str
     artist: str
-    album: str
-    genre: str
-    year: int
-    lyrics_snippet: str
+    album: str = ""
+    genre: str = ""
+    year: int = 0
+    lyrics_snippet: str = ""
     score: float = 0.0
 
 
@@ -20,11 +20,11 @@ class SongDetail(BaseModel):
     id: int
     title: str
     artist: str
-    album: str
-    genre: str
-    year: int
-    lyrics_snippet: str
-    full_lyrics: str
+    album: str = ""
+    genre: str = ""
+    year: int = 0
+    lyrics_snippet: str = ""
+    full_lyrics: str = ""
     url: str | None = None
     duration: str | None = None
     language: str | None = None

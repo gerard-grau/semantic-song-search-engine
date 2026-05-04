@@ -35,15 +35,19 @@ export default function TopResults({ songs, message, query, onSongHover, onSongC
             <div className="result-body">
               <div className="result-header">
                 <span className="result-title">{song.title}</span>
-                <span
-                  className="result-genre-tag"
-                  style={{ background: GENRE_COLORS[song.genre] || '#888' }}
-                >
-                  {song.genre}
-                </span>
+                {song.genre && (
+                  <span
+                    className="result-genre-tag"
+                    style={{ background: GENRE_COLORS[song.genre] || '#888' }}
+                  >
+                    {song.genre}
+                  </span>
+                )}
               </div>
               <div className="result-artist">{song.artist}</div>
-              <div className="result-meta">{song.album} · {song.year}</div>
+              <div className="result-meta">
+                {song.album && song.album}{song.album && song.year ? ' · ' : ''}{song.year || ''}
+              </div>
               <div className="result-lyrics">{song.lyrics_snippet}</div>
             </div>
 

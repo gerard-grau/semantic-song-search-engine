@@ -1,119 +1,47 @@
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
-from sklearn.decomposition import PCA
-from sklearn.manifold import MDS, TSNE
-from sklearn.preprocessing import StandardScaler
+
+from app.backend.core.data_loader import load_all_songs
+from app.backend.core.projections import _run_tsne, _songs_to_matrix
 
 
-BASE_DIR = Path(__file__).resolve().parent
-BACKEND_DIR = BASE_DIR.parent
-DATA_DIR = BACKEND_DIR / "data"
+_DATA_DIR = Path(__file__).parent.parent / "data"
+_OUTPUT = _DATA_DIR / "embedded_songs_2d.parquet"
 
 
-def data_path(filename):
-    return DATA_DIR / filename
-
-
-def _to_embedding_matrix(series):
-    embeddings = []
-
-    for value in series:
-        if isinstance(value, str):
-            value = value.strip()
-
-            if value.startswith("[") and value.endswith("]"):
-                value = np.fromstring(value.strip("[]"), sep=",")
-            else:
-                raise ValueError("Embedding is stored as a string but is not a valid list.")
-
-        embeddings.append(np.array(value, dtype=np.float32))
-
-    return np.vstack(embeddings)
-
-
-def generate_2D(
-    input_file="embedded_songs.parquet",
-    output_file="embedded_songs_2d.parquet",
-    method="pca",
-    scale=True,
-    random_state=42,
-    limit=None,
-):
-    input_path = data_path(input_file)
-    output_path = data_path(output_file)
-
-    table = pq.read_table(
-        input_path,
-        columns=["id_lyrics", "embedded_lyrics"],
-    )
-
-    df = table.to_pandas()
+def run_pipeline(limit: int | None = None) -> dict:
+    songs = load_all_songs()
 
     if limit is not None:
-        df = df.head(limit)
+        songs = songs[:limit]
 
-    if df.empty:
-        raise ValueError("The input embedding file is empty.")
+    if not songs:
+        raise ValueError("No songs loaded — check that embedded_songs.parquet exists.")
 
-    ids = df["id_lyrics"].to_numpy()
-    X = _to_embedding_matrix(df["embedded_lyrics"])
+    print(f"Projecting {len(songs)} songs with t-SNE...")
+    matrix = _songs_to_matrix(songs)
+    coords = _run_tsne(matrix, n_components=2)
 
-    if scale:
-        X = StandardScaler().fit_transform(X)
+    result = pd.DataFrame({
+        "id_lyrics": [s["id"] for s in songs],
+        "x": coords[:, 0],
+        "y": coords[:, 1],
+    })
 
-    method = method.lower()
+    _OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    result.to_parquet(_OUTPUT, index=False)
 
-    if method == "pca":
-        projector = PCA(n_components=2, random_state=random_state)
-        X_2d = projector.fit_transform(X)
-
-    elif method == "mds":
-        projector = MDS(
-            n_components=2,
-            random_state=random_state,
-            n_init=1,
-            max_iter=300,
-            normalized_stress="auto",
-        )
-        X_2d = projector.fit_transform(X)
-
-    elif method == "tsne":
-        projector = TSNE(
-            n_components=2,
-            random_state=random_state,
-            perplexity=30,
-            init="pca",
-            learning_rate="auto",
-        )
-        X_2d = projector.fit_transform(X)
-
-    else:
-        raise ValueError(
-            f"Unknown method: {method}. Use one of: 'pca', 'mds', 'tsne'."
-        )
-
-    result = pd.DataFrame(
-        {
-            "id_lyrics": ids,
-            "x": X_2d[:, 0],
-            "y": X_2d[:, 1],
-            "method": method,
-        }
-    )
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    result.to_parquet(output_path, index=False)
-
-    return {
-        "rows": len(result),
-        "method": method,
-        "output_file": str(output_path),
-    }
+    print(f"Done — {len(result)} rows written to {_OUTPUT}")
+    return {"rows": len(result), "output_file": str(_OUTPUT)}
 
 
 if __name__ == "__main__":
-    result = generate_2D(method="pca")
-    print(result)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate 2D song projections from embeddings.")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Max number of songs to process (default: all)")
+    args = parser.parse_args()
+
+    run_pipeline(limit=args.limit)
