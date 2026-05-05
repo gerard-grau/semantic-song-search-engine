@@ -48,8 +48,15 @@ from collections import defaultdict
 COST_SWAP        = 0.5    # adjacent transposition
 COST_INSERT      = 1.0    # source missing a char compared to target
 COST_DELETE      = 1.0    # source has an extra char compared to target
-COST_SUBSTITUTE  = 1.0    # base, multiplied by keyboard distance ∈ [0, 1]
+COST_SUBSTITUTE  = 1.2    # base, multiplied by keyboard distance ∈ [0, 1].
+                          # Higher than insert/delete because substitutions are
+                          # active typing errors (pressed wrong key) rather than
+                          # motor slips (missed a key). Set so 2 substitutions
+                          # exceed MAX_WORD_DISTANCE — the model can't propose
+                          # 'través' as a fix for 'grases' (3 cheap subs adding
+                          # up to 1.5 was too forgiving).
 COST_SPACE       = 2.0    # insert or delete a space
+COST_DOT         = 0.10   # insert/delete the Catalan middle dot (l·l)
 
 # Probability tuning. Distance is interpreted RELATIVE TO WORD LENGTH:
 # a 1-char mistake in "es" (50% wrong) is much more suspicious than the
@@ -62,8 +69,14 @@ TOP_K          = 20
 # Lexicon candidates are also weighted by frequency: a high-freq word
 # ("és" at freq 6610) is much more plausible than a rare one ("ez" at
 # freq 1) at the same edit distance. FREQ_REF is the freq above which a
-# word gets the full factor of 1.0.
+# word gets the full factor of 1.0 in the (single-arg) input-rarity check.
 FREQ_REF = 500.0
+
+# Softmax NULL-anchor score for the lexicon-candidate distribution. Sets
+# the absolute scale: a single weak candidate scoring near 0 ends up with
+# similar mass to the null (≈ 0.5), not full confidence. Higher values
+# require candidates to be strictly better than null to beat it.
+SOFTMAX_NULL_SCORE = 0.0
 
 # Source multipliers on the prob
 WEIGHT_CATALOG = 1.0
@@ -72,9 +85,14 @@ WEIGHT_LEXICON = 0.7    # generic lexicon hits sit just below catalog
 # Threshold shaping. Common inputs raise the bar (corrections almost always
 # noise); rare/OOV inputs lower it (almost certainly typos, surface the best
 # matches). The cubic on COMMON_PENALTY leaves moderately-frequent words
-# (ff~0.7) mostly alone and bites hard on top-tier ones (ff~1.0).
-COMMON_PENALTY = 0.30
-RARE_RELAX     = 0.15
+# (ff~0.7) mostly alone and bites hard on top-tier ones (ff~1.0). RARE_RELAX
+# is wide because the lexicon path softmaxes its candidates: a 0.22 prob in
+# a 3-way distribution is meaningful, not noise. COMMON_PENALTY is wide
+# enough that an already-common input ('carrer') won't get a one-edit
+# catalog distractor ('carter') promoted to ~0.7 just because it happens
+# to be in the catalog — the user typed a real Catalan word, trust them.
+COMMON_PENALTY = 0.45
+RARE_RELAX     = 0.30
 
 # Distance caps so we never compute irrelevant matches.
 MAX_PHRASE_DISTANCE = 4.0
@@ -154,16 +172,26 @@ def edit_distance(a: str, b: str, cap: float = float('inf')) -> float:
     n, m = len(a) + 1, len(b) + 1
     dp = [[0.0] * m for _ in range(n)]
     for i in range(1, n):
-        dp[i][0] = dp[i - 1][0] + (COST_SPACE if a[i - 1] == ' ' else COST_DELETE)
+        ca = a[i - 1]
+        dp[i][0] = dp[i - 1][0] + (
+            COST_SPACE if ca == ' ' else COST_DOT if ca == '·' else COST_DELETE
+        )
     for j in range(1, m):
-        dp[0][j] = dp[0][j - 1] + (COST_SPACE if b[j - 1] == ' ' else COST_INSERT)
+        cb = b[j - 1]
+        dp[0][j] = dp[0][j - 1] + (
+            COST_SPACE if cb == ' ' else COST_DOT if cb == '·' else COST_INSERT
+        )
 
     for i in range(1, n):
         row_min = float('inf')
         for j in range(1, m):
             ca, cb = a[i - 1], b[j - 1]
-            del_c = dp[i - 1][j] + (COST_SPACE if ca == ' ' else COST_DELETE)
-            ins_c = dp[i][j - 1] + (COST_SPACE if cb == ' ' else COST_INSERT)
+            del_c = dp[i - 1][j] + (
+                COST_SPACE if ca == ' ' else COST_DOT if ca == '·' else COST_DELETE
+            )
+            ins_c = dp[i][j - 1] + (
+                COST_SPACE if cb == ' ' else COST_DOT if cb == '·' else COST_INSERT
+            )
             sub_c = dp[i - 1][j - 1] + COST_SUBSTITUTE * keyboard_distance(ca, cb)
             best = min(del_c, ins_c, sub_c)
             if (i >= 2 and j >= 2
@@ -201,7 +229,7 @@ def freq_factor(freq: int) -> float:
 # Normalisation & tokenisation
 # ---------------------------------------------------------------------------
 
-_TOKEN_RE = re.compile(r"[a-zàèéíòóúïüç]+(?:·[a-zàèéíòóúïüç]+)*", re.IGNORECASE)
+_TOKEN_RE = re.compile(r"[a-zàèéíòóúïüçñ]+(?:·[a-zàèéíòóúïüçñ]+)*", re.IGNORECASE)
 _CONTRACTION_RE = re.compile(r"([ldsmtn])'", re.IGNORECASE)
 
 
@@ -307,9 +335,10 @@ class Parser2:
         # Step 2: phrase match against full title/artist phrases.
         self._phrase_match(q, result)
 
-        # Step 3: per-word fuzzy expansion.
+        # Step 3: per-word fuzzy expansion + glued-word split.
         for w in words:
             self._word_fuzzy(w, result)
+            self._split_match(w, result)
 
         # Per-step filters already enforce a min-prob (MIN_PROB shifted by
         # COMMON_PENALTY/RARE_RELAX), so the global cut here is just a
@@ -343,21 +372,17 @@ class Parser2:
 
     def _word_fuzzy(self, word: str, result: dict[str, float]) -> None:
         wlen = len(word)
-        # Length filter is much tighter than the distance cap because each
-        # insert/delete already costs 1.0; a candidate >1 char shorter or
-        # longer than the input can't fit under the cap unless it's stuffed
-        # with cheap accent-only diffs, which the fold-cheap substitution
-        # already captures.
-        len_window = 1
+        # Length budget is tight (1) because each insert/delete already
+        # costs 1.0 — but middle dots are cheap (COST_DOT), so a candidate
+        # with a `·` the input lacks (or vice versa) is allowed extra slack.
+        input_dots = word.count('·')
 
         input_freq = self.lexicon.get(word, 0)
         input_ff = freq_factor(input_freq)
         rarity = 1 - input_ff
         # Threshold blends two effects. Common inputs (rarity≈0) raise the
         # bar so we don't propose noise corrections; rare/OOV inputs lower
-        # it so the best near-matches surface. Candidates are still weighted
-        # by their own frequency, so rare candidates get filtered out even
-        # when the input is OOV — only common Catalan words win.
+        # it so the best near-matches surface.
         min_prob_word = (MIN_PROB
                          + COMMON_PENALTY * input_ff ** 3
                          - RARE_RELAX * rarity)
@@ -367,7 +392,7 @@ class Parser2:
 
         # Catalog tokens — small set, brute force.
         for tok in self.catalog_tokens:
-            if abs(len(tok) - wlen) > len_window:
+            if abs(len(tok) - wlen) > 1 + input_dots + tok.count('·'):
                 continue
             d = edit_distance(word, tok, cap=MAX_WORD_DISTANCE)
             if d > MAX_WORD_DISTANCE:
@@ -391,28 +416,106 @@ class Parser2:
             tr = folded[i + 1] + folded[i]
             candidates.update(self._lex_2gram.get(tr, ()))
 
+        # Score every viable candidate, then softmax the lot against a NULL
+        # anchor to convert raw scores into a distribution. Softmax does the
+        # work that hand-tuned freq factors used to: it concentrates mass on
+        # the strongest candidate(s), shares mass evenly when many candidates
+        # are similar, and squashes the long tail of freq-1 noise (proper
+        # nouns, foreign loanwords) — all without an absolute frequency
+        # floor that arbitrarily cuts moderately-rare real Catalan words.
+        # The NULL anchor (score 0) sets the absolute scale: when the best
+        # candidate is weak, no candidate gets near full confidence.
+        #
+        # Accent-fixes are handled out-of-band: when the candidate's folded
+        # form matches the input's, the score formula's freq prior would let
+        # a higher-freq but more distant word win (e.g., 'estar' over 'està'
+        # for input 'esta'), but accent-only edits are reliable enough that
+        # they should be promoted directly via distance-to-prob. Only fire
+        # in the typo→fix direction (cand at least as common as input) to
+        # avoid promoting Spanish 'está' over correct Catalan 'està'.
         folded_word = folded
+        scored: list[tuple[str, float]] = []
         for cand in candidates:
-            if abs(len(cand) - wlen) > len_window:
+            if abs(len(cand) - wlen) > 1 + input_dots + cand.count('·'):
                 continue
             d = edit_distance(word, cand, cap=MAX_WORD_DISTANCE)
             if d > MAX_WORD_DISTANCE:
                 continue
-            # Accent-fix bypass: when the unaccented forms match, skip the
-            # freq penalty so a rare accented form ("enciclopèdia") still
-            # wins against an unaccented typo ("enciclopedia"). Only apply
-            # it in the typo→fix direction — i.e. cand is at least as
-            # common as the input. Otherwise we'd promote rare junk like
-            # Spanish "está" when the user already typed proper "està".
             if _fold(cand) == folded_word and self.lexicon[cand] >= input_freq:
-                ff = 1.0
-            else:
-                ff = freq_factor(self.lexicon[cand])
-            p = distance_to_prob(d, max(wlen, len(cand))) * lex_weight * ff
+                p = distance_to_prob(d, max(wlen, len(cand))) * lex_weight
+                if p < min_prob_word:
+                    continue
+                if p > result.get(cand, 0.0):
+                    result[cand] = p
+                continue
+            L = max(wlen, len(cand))
+            score = -d / L * RELATIVE_DECAY + math.log1p(self.lexicon[cand])
+            scored.append((cand, score))
+
+        if not scored:
+            return
+
+        max_score = max(SOFTMAX_NULL_SCORE, max(s for _, s in scored))
+        sum_exps = math.exp(SOFTMAX_NULL_SCORE - max_score) + sum(
+            math.exp(s - max_score) for _, s in scored
+        )
+        for cand, score in scored:
+            p = math.exp(score - max_score) / sum_exps * lex_weight
             if p < min_prob_word:
                 continue
             if p > result.get(cand, 0.0):
                 result[cand] = p
+
+    def _split_match(self, word: str, result: dict[str, float]) -> None:
+        """
+        Try interpreting a long token as two glued-together words. Only
+        fires when both halves are real words, the rarer half clears an
+        absolute frequency floor (so 'lel' freq=1 doesn't qualify), AND
+        each half is more frequent than the whole — so common words like
+        'esta' aren't split into 'es'+'ta' (where 'ta' is rarer than
+        'esta'), but OOV concatenations like 'expressióculturals' or
+        'pertu' are. Catalog tokens count as effectively-infinite
+        frequency: they're in the user's data, so they trump any lexicon
+        whole and bypass the freq floor.
+        """
+        if word in self.catalog_tokens:
+            return
+        whole_freq = self.lexicon.get(word, 0)
+
+        BIG = 10 ** 9
+        MIN_HALF_FREQ = 20  # ≈ zipf 4.3, filters lexicon junk like 'lel' (freq 1)
+
+        def _freq(w: str) -> int:
+            f = self.lexicon.get(w, 0)
+            if w in self.catalog_tokens:
+                f += BIG
+            return f
+
+        best: tuple[int, str, str] | None = None  # (min-half-freq, left, right)
+        for i in range(2, len(word) - 1):
+            left, right = word[:i], word[i:]
+            lf, rf = _freq(left), _freq(right)
+            if min(lf, rf) <= max(whole_freq, MIN_HALF_FREQ):
+                continue
+            score = min(lf, rf)
+            if best is None or score > best[0]:
+                best = (score, left, right)
+
+        if best is None:
+            return
+        _, left, right = best
+
+        rarity = 1 - freq_factor(whole_freq)
+        lex_weight = WEIGHT_LEXICON + (1 - WEIGHT_LEXICON) * rarity
+        # Treat the missing space as a single-char edit (one of the most
+        # common typos), not the harsh COST_SPACE used in phrase matching:
+        # the lexicon checks above already prove the boundary is real.
+        base = distance_to_prob(1.0, len(word))
+        for half in (left, right):
+            weight = WEIGHT_CATALOG if half in self.catalog_tokens else lex_weight
+            p = base * weight
+            if p > result.get(half, 0.0):
+                result[half] = p
 
 
 # ---------------------------------------------------------------------------

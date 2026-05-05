@@ -1,0 +1,6 @@
+exact_search_query.txt has prompts with no typographic errors.
+error_searchs_query.txt has prompts with typographic errors.
+answers.txt has the answers for both files (the answers are the same).
+
+We need to compare the answer of both type of files, they should be the same.
+Apart from that exact_search should find all songs.
