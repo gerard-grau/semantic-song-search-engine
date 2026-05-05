@@ -39,6 +39,7 @@ import re
 import time
 import unicodedata
 from collections import defaultdict
+from functools import lru_cache
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +112,14 @@ _KEY_POS: dict[str, tuple[int, int]] = {
 _KEY_DIAG = math.hypot(len(_QWERTY[0]) - 1, len(_QWERTY) - 1)
 
 
+@lru_cache(maxsize=4096)
 def _fold_char(ch: str) -> str:
-    """Strip diacritics; fold ç → c. Used so accent-only differences are cheap."""
+    """Strip diacritics; fold ç → c. Used so accent-only differences are cheap.
+
+    Memoised: this is called millions of times per query inside the edit-
+    distance hot loop, but the alphabet is small (≲ 200 chars), so an
+    unbounded cache on first sight collapses to a dict lookup forever.
+    """
     nf = unicodedata.normalize('NFKD', ch)
     base = ''.join(c for c in nf if not unicodedata.combining(c))
     if base in ('ç', 'Ç'):
@@ -136,6 +143,7 @@ _KBD_SCHEDULE = [0.0, 0.60, 0.80, 0.95, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 _ACCENT_ONLY_COST = 0.10
 
 
+@lru_cache(maxsize=16384)
 def keyboard_distance(a: str, b: str) -> float:
     """
     Substitution cost ∈ [0, 1] between two characters.
@@ -144,6 +152,10 @@ def keyboard_distance(a: str, b: str) -> float:
     - same letter modulo accent ("e" / "é" / "è") → 0.10  (very cheap)
     - adjacent QWERTY keys → 0.60  (typo, but a real edit)
     - far-apart keys / unknown chars → 1.0
+
+    Memoised: called millions of times per query inside edit_distance, but
+    only over the cartesian product of the small character alphabet — the
+    cache stabilises within the first few queries.
     """
     if a == b:
         return 0.0
@@ -269,6 +281,21 @@ class Parser2:
         # Catalog tokens — every word that appears in any title or artist.
         self.catalog_tokens: set[str] = set()
 
+        # Length-bucket indexes so phrase / token fuzzy matching only scans
+        # candidates whose length is within the relevant edit-distance
+        # budget — turns a per-query O(N) scan into O(N / buckets).
+        self._titles_by_len:  dict[int, list[tuple[str, str]]] = defaultdict(list)
+        self._artists_by_len: dict[int, list[tuple[str, str]]] = defaultdict(list)
+        self._cat_tokens_by_len: dict[int, list[str]] = defaultdict(list)
+
+        # 2-gram inverted index over accent-folded catalog tokens — same
+        # role as `_lex_2gram` below, but for the (potentially 100k+) set
+        # of words that appear in titles and artists. Without this, a query
+        # like "sau" would force a per-token edit-distance call across the
+        # entire token set; with it, we only score candidates that share at
+        # least one bigram (or its swap-corrected mirror) with the input.
+        self._cat_2gram: dict[str, set[str]] = defaultdict(set)
+
         # Generic Catalan lexicon (optional).
         self.lexicon: dict[str, int] = {}
 
@@ -289,13 +316,26 @@ class Parser2:
             t = normalize(t_disp)
             a = normalize(a_disp)
             if t and t not in seen_titles:
-                self.titles.append((t, t_disp))
+                entry = (t, t_disp)
+                self.titles.append(entry)
+                self._titles_by_len[len(t)].append(entry)
                 seen_titles.add(t)
                 self.catalog_tokens.update(tokenize(t))
             if a and a not in seen_artists:
-                self.artists.append((a, a_disp))
+                entry = (a, a_disp)
+                self.artists.append(entry)
+                self._artists_by_len[len(a)].append(entry)
                 seen_artists.add(a)
                 self.catalog_tokens.update(tokenize(a))
+
+        # Length buckets + accent-folded 2-gram index over catalog tokens.
+        # Built once so per-query word fuzzy is a posting-list lookup, not
+        # a full scan.
+        for tok in self.catalog_tokens:
+            self._cat_tokens_by_len[len(tok)].append(tok)
+            folded = _fold(tok)
+            for i in range(len(folded) - 1):
+                self._cat_2gram[folded[i:i + 2]].add(tok)
         print(f"[catalog] {len(self.titles)} titles, {len(self.artists)} "
               f"artists, {len(self.catalog_tokens)} unique tokens")
 
@@ -321,7 +361,20 @@ class Parser2:
     # Public API
     # ------------------------------------------------------------------
 
-    def parse(self, query: str, top_k: int = TOP_K) -> dict[str, float]:
+    def parse(
+        self,
+        query: str,
+        top_k: int = TOP_K,
+        phrase_match: bool = True,
+    ) -> dict[str, float]:
+        """
+        ``phrase_match`` toggles the full-query-against-catalog-phrase scan.
+        Disable it when an external retrieval layer (e.g. an inverted index)
+        already handles multi-word matching: phrase scanning is O(catalog)
+        in worst case and dominates latency for large catalogs, while word-
+        level fuzzy + the inverted index together cover the same recall for
+        per-word typos.
+        """
         q = normalize(query)
         words = tokenize(q)
 
@@ -333,7 +386,8 @@ class Parser2:
             result[w] = 1.0
 
         # Step 2: phrase match against full title/artist phrases.
-        self._phrase_match(q, result)
+        if phrase_match:
+            self._phrase_match(q, result)
 
         # Step 3: per-word fuzzy expansion + glued-word split.
         for w in words:
@@ -353,13 +407,22 @@ class Parser2:
 
     def _phrase_match(self, query: str, result: dict[str, float]) -> None:
         ql = len(query)
-        for phrase, _ in self.titles + self.artists:
-            # Length filter — DL distance is at least |len(a) - len(b)|
-            # under unit costs; with our space cost being 2, the lower
-            # bound is even higher when one side has more spaces. Cheap
-            # gate.
-            if abs(len(phrase) - ql) > MAX_PHRASE_DISTANCE:
-                continue
+        # Length-bucketed scan: only iterate phrases whose length is
+        # within MAX_PHRASE_DISTANCE of the query. With a 60k-phrase
+        # catalog this turns a per-query 60k-iteration scan into a
+        # few-thousand-iteration one (one bucket per length).
+        max_d = int(MAX_PHRASE_DISTANCE)
+        for length in range(max(0, ql - max_d), ql + max_d + 1):
+            bucket = self._titles_by_len.get(length)
+            if bucket:
+                self._phrase_scan(query, ql, bucket, result)
+            bucket = self._artists_by_len.get(length)
+            if bucket:
+                self._phrase_scan(query, ql, bucket, result)
+
+    @staticmethod
+    def _phrase_scan(query: str, ql: int, bucket, result: dict[str, float]) -> None:
+        for phrase, _ in bucket:
             d = edit_distance(query, phrase, cap=MAX_PHRASE_DISTANCE)
             if d > MAX_PHRASE_DISTANCE:
                 continue
@@ -390,8 +453,27 @@ class Parser2:
         # the standard 0.7 lexicon penalty so catalog hits stay preferred.
         lex_weight = WEIGHT_LEXICON + (1 - WEIGHT_LEXICON) * rarity
 
-        # Catalog tokens — small set, brute force.
-        for tok in self.catalog_tokens:
+        # Catalog tokens — narrow with length buckets + 2-gram filter so we
+        # don't compute edit_distance against every catalog word. For an
+        # input of length 4 we only consider buckets [3, 4, 5] (insertion/
+        # deletion costs are 1.0, MAX_WORD_DISTANCE = 1.5), and within
+        # those, only tokens that share an accent-folded bigram (or its
+        # swap-corrected mirror) with the input.
+        folded_in = _fold(word)
+        cat_candidates: set[str] = set()
+        for i in range(len(folded_in) - 1):
+            cat_candidates.update(self._cat_2gram.get(folded_in[i:i + 2], ()))
+            tr = folded_in[i + 1] + folded_in[i]
+            cat_candidates.update(self._cat_2gram.get(tr, ()))
+        # Also pull in same-length tokens with no shared bigram (e.g. the
+        # input is a single bigram or has unusual characters), via the
+        # length bucket. Keeps recall on very short inputs.
+        for length in range(max(1, wlen - 1), wlen + 2):
+            bucket = self._cat_tokens_by_len.get(length)
+            if bucket and len(bucket) <= 256:
+                cat_candidates.update(bucket)
+
+        for tok in cat_candidates:
             if abs(len(tok) - wlen) > 1 + input_dots + tok.count('·'):
                 continue
             d = edit_distance(word, tok, cap=MAX_WORD_DISTANCE)

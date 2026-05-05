@@ -28,10 +28,12 @@ async def lifespan(app: FastAPI):
     """
     import asyncio
 
+    from app.backend.core.cercador_index import prewarm as prewarm_cercador
     from app.backend.core.encoder import load_encoder
 
-    logger.info("Pre-loading embedding model — this takes ~60-90 s on first run …")
     loop = asyncio.get_event_loop()
+
+    logger.info("Pre-loading embedding model — this takes ~60-90 s on first run …")
     try:
         await loop.run_in_executor(None, load_encoder)
         logger.info("Embedding model ready.")
@@ -41,6 +43,18 @@ async def lifespan(app: FastAPI):
             "Semantic search will fall back to keyword matching.",
             exc,
         )
+
+    logger.info("Building cercador index over real CSVs …")
+    try:
+        await loop.run_in_executor(None, prewarm_cercador)
+        logger.info("Cercador index ready.")
+    except Exception as exc:
+        logger.warning(
+            "Could not build cercador index (%s). "
+            "First /api/cercador call will pay the build cost lazily.",
+            exc,
+        )
+
     yield  # server is now ready to accept requests
 
 
