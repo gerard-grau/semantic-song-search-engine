@@ -73,15 +73,17 @@ TOP_K          = 20
 # word gets the full factor of 1.0 in the (single-arg) input-rarity check.
 FREQ_REF = 500.0
 
-# Softmax NULL-anchor score for the lexicon-candidate distribution. Sets
-# the absolute scale: a single weak candidate scoring near 0 ends up with
-# similar mass to the null (≈ 0.5), not full confidence. Higher values
-# require candidates to be strictly better than null to beat it.
-SOFTMAX_NULL_SCORE = 0.0
-
-# Source multipliers on the prob
+# Word-fuzzy is lexicon-only. Every candidate's probability is
+#     p = distance_to_prob(d, L) × freq_factor(freq)
+# Common Catalan words win cleanly at the same edit distance because
+# freq_factor crushes the long tail of freq≈1 wordfreq noise (interjections,
+# loanwords, OCR junk). Accent-only fixes bypass the freq factor — the edit
+# itself is the signal there.
+#
+# WEIGHT_CATALOG / WEIGHT_LEXICON are kept for _phrase_match and
+# _split_match, which still use the catalog data structures.
 WEIGHT_CATALOG = 1.0
-WEIGHT_LEXICON = 0.7    # generic lexicon hits sit just below catalog
+WEIGHT_LEXICON = 0.7
 
 # Threshold shaping. Common inputs raise the bar (corrections almost always
 # noise); rare/OOV inputs lower it (almost certainly typos, surface the best
@@ -449,100 +451,34 @@ class Parser2:
         min_prob_word = (MIN_PROB
                          + COMMON_PENALTY * input_ff ** 3
                          - RARE_RELAX * rarity)
-        # OOV input → trust the lexicon at full weight; common input keeps
-        # the standard 0.7 lexicon penalty so catalog hits stay preferred.
-        lex_weight = WEIGHT_LEXICON + (1 - WEIGHT_LEXICON) * rarity
 
-        # Catalog tokens — narrow with length buckets + 2-gram filter so we
-        # don't compute edit_distance against every catalog word. For an
-        # input of length 4 we only consider buckets [3, 4, 5] (insertion/
-        # deletion costs are 1.0, MAX_WORD_DISTANCE = 1.5), and within
-        # those, only tokens that share an accent-folded bigram (or its
-        # swap-corrected mirror) with the input.
-        folded_in = _fold(word)
-        cat_candidates: set[str] = set()
-        for i in range(len(folded_in) - 1):
-            cat_candidates.update(self._cat_2gram.get(folded_in[i:i + 2], ()))
-            tr = folded_in[i + 1] + folded_in[i]
-            cat_candidates.update(self._cat_2gram.get(tr, ()))
-        # Also pull in same-length tokens with no shared bigram (e.g. the
-        # input is a single bigram or has unusual characters), via the
-        # length bucket. Keeps recall on very short inputs.
-        for length in range(max(1, wlen - 1), wlen + 2):
-            bucket = self._cat_tokens_by_len.get(length)
-            if bucket and len(bucket) <= 256:
-                cat_candidates.update(bucket)
-
-        for tok in cat_candidates:
-            if abs(len(tok) - wlen) > 1 + input_dots + tok.count('·'):
-                continue
-            d = edit_distance(word, tok, cap=MAX_WORD_DISTANCE)
-            if d > MAX_WORD_DISTANCE:
-                continue
-            p = distance_to_prob(d, max(wlen, len(tok))) * WEIGHT_CATALOG
-            if p < min_prob_word:
-                continue
-            if p > result.get(tok, 0.0):
-                result[tok] = p
-
-        # Lexicon — pre-filter via 2-gram overlap so we don't scan 50k
-        # words per input token. Also include reversed bigrams so a swap
-        # typo at the start of the word ("amro" → "amor") still surfaces
-        # candidates whose first bigram is "am" (the swap-corrected form).
         if not self.lexicon:
             return
-        folded = _fold(word)
+
+        # Pre-filter via 2-gram overlap so we don't scan 50k+ words per
+        # input token. Reversed bigrams catch swap typos at the start of
+        # the word ("amro" → "amor": share "am" only after un-swapping).
+        folded_in = _fold(word)
         candidates: set[str] = set()
-        for i in range(len(folded) - 1):
-            candidates.update(self._lex_2gram.get(folded[i:i + 2], ()))
-            tr = folded[i + 1] + folded[i]
+        for i in range(len(folded_in) - 1):
+            candidates.update(self._lex_2gram.get(folded_in[i:i + 2], ()))
+            tr = folded_in[i + 1] + folded_in[i]
             candidates.update(self._lex_2gram.get(tr, ()))
 
-        # Score every viable candidate, then softmax the lot against a NULL
-        # anchor to convert raw scores into a distribution. Softmax does the
-        # work that hand-tuned freq factors used to: it concentrates mass on
-        # the strongest candidate(s), shares mass evenly when many candidates
-        # are similar, and squashes the long tail of freq-1 noise (proper
-        # nouns, foreign loanwords) — all without an absolute frequency
-        # floor that arbitrarily cuts moderately-rare real Catalan words.
-        # The NULL anchor (score 0) sets the absolute scale: when the best
-        # candidate is weak, no candidate gets near full confidence.
-        #
-        # Accent-fixes are handled out-of-band: when the candidate's folded
-        # form matches the input's, the score formula's freq prior would let
-        # a higher-freq but more distant word win (e.g., 'estar' over 'està'
-        # for input 'esta'), but accent-only edits are reliable enough that
-        # they should be promoted directly via distance-to-prob. Only fire
-        # in the typo→fix direction (cand at least as common as input) to
-        # avoid promoting Spanish 'está' over correct Catalan 'està'.
-        folded_word = folded
-        scored: list[tuple[str, float]] = []
         for cand in candidates:
             if abs(len(cand) - wlen) > 1 + input_dots + cand.count('·'):
                 continue
             d = edit_distance(word, cand, cap=MAX_WORD_DISTANCE)
             if d > MAX_WORD_DISTANCE:
                 continue
-            if _fold(cand) == folded_word and self.lexicon[cand] >= input_freq:
-                p = distance_to_prob(d, max(wlen, len(cand))) * lex_weight
-                if p < min_prob_word:
-                    continue
-                if p > result.get(cand, 0.0):
-                    result[cand] = p
-                continue
-            L = max(wlen, len(cand))
-            score = -d / L * RELATIVE_DECAY + math.log1p(self.lexicon[cand])
-            scored.append((cand, score))
-
-        if not scored:
-            return
-
-        max_score = max(SOFTMAX_NULL_SCORE, max(s for _, s in scored))
-        sum_exps = math.exp(SOFTMAX_NULL_SCORE - max_score) + sum(
-            math.exp(s - max_score) for _, s in scored
-        )
-        for cand, score in scored:
-            p = math.exp(score - max_score) / sum_exps * lex_weight
+            cand_freq = self.lexicon[cand]
+            # Accent-only fix: distance is the signal, freq is irrelevant.
+            # Only typo→fix direction so we don't promote Spanish 'está'
+            # over correct Catalan 'està' for input 'està'.
+            if _fold(cand) == folded_in and cand_freq >= input_freq:
+                p = distance_to_prob(d, max(wlen, len(cand)))
+            else:
+                p = distance_to_prob(d, max(wlen, len(cand))) * freq_factor(cand_freq)
             if p < min_prob_word:
                 continue
             if p > result.get(cand, 0.0):

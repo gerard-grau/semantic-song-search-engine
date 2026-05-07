@@ -337,11 +337,28 @@ class CercadorIndex:
             self._phrase_rerank(q_norm, ql, noticia_scores, self._noticies_title_norm,
                                 top_n=120, weight=12.0)
 
+        # Dedup keys are normalized so casing/accent variants of the same
+        # record collapse: "Sau" and "sau" → one group, etc.
         return {
-            "grups":    self._top(grup_scores,    self.grups,    top_grups),
-            "cancons":  self._top(song_scores,    self.songs,    top_songs),
-            "noticies": self._top(noticia_scores, self.noticies, top_noticies),
-            "parsed":   parsed,
+            "grups": self._top(
+                grup_scores, self.grups, top_grups,
+                dedup_key=lambda g: normalize(g.get("name", "")),
+            ),
+            "cancons": self._top(
+                song_scores, self.songs, top_songs,
+                dedup_key=lambda s: (
+                    normalize(s.get("title", "")),
+                    normalize(s.get("artist", "")),
+                ),
+            ),
+            "noticies": self._top(
+                noticia_scores, self.noticies, top_noticies,
+                dedup_key=lambda n: (
+                    normalize(n.get("title", "")),
+                    n.get("date", ""),
+                ),
+            ),
+            "parsed": parsed,
         }
 
     @staticmethod
@@ -413,13 +430,33 @@ class CercadorIndex:
         scores: dict[int, float],
         items: list[dict],
         k: int,
+        dedup_key=None,
     ) -> list[dict]:
+        """
+        Top-k by score, with optional dedup by a caller-supplied key. Source
+        lists have logical duplicates (augmented_songs has repeated id_lyrics
+        rows; grups/noticies CSVs aren't unique on name/title) so the same
+        record can sit at several indices, each scored independently. We sort
+        all of them, then walk in score order keeping the first occurrence
+        per dedup key — guarantees k *distinct* results when available.
+        """
         if not scores:
             return []
-        # Cheap top-k: sort once. For the catalog sizes here (≤ 1 M) this is
-        # well under a millisecond on hot scores.
-        ranked = sorted(scores.items(), key=lambda kv: -kv[1])[:k]
-        return [items[i] for i, _ in ranked]
+        ranked = sorted(scores.items(), key=lambda kv: -kv[1])
+        if dedup_key is None:
+            return [items[i] for i, _ in ranked[:k]]
+        out: list[dict] = []
+        seen: set = set()
+        for i, _ in ranked:
+            item = items[i]
+            key = dedup_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+            if len(out) >= k:
+                break
+        return out
 
 
 # ---------------------------------------------------------------------------
