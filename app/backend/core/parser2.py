@@ -360,6 +360,26 @@ class Parser2:
     # Public API
     # ------------------------------------------------------------------
 
+    def parse_per_word(self, query: str) -> list[dict[str, float]]:
+        """
+        Per-input-word candidate distributions.
+
+        Like `parse`, but preserves the per-word structure instead of
+        max-merging across positions. Returned list is parallel to
+        `tokenize(normalize(query))` — index i is the normalised
+        distribution for word i. Empty list if the query has no tokens.
+
+        Use this when downstream needs the cross-product of per-position
+        alternates (e.g. enumerating sentence reconstructions for an
+        exact-phrase match boost) — the merged `parse()` output throws
+        away which word produced which alternate.
+        """
+        q = normalize(query)
+        words = tokenize(q)
+        if not words:
+            return []
+        return [self._candidates_for_word(w) for w in words]
+
     def parse(self,
               query: str,
               top_k: int = 20,
@@ -375,14 +395,13 @@ class Parser2:
 
         `phrase_match` is accepted for API stability but ignored.
         """
-        q = normalize(query)
-        words = tokenize(q)
-        if not words:
+        per_word = self.parse_per_word(query)
+        if not per_word:
             return {}
 
         merged: dict[str, float] = {}
-        for w in words:
-            for cand, p in self._candidates_for_word(w).items():
+        for dist in per_word:
+            for cand, p in dist.items():
                 if p > merged.get(cand, 0.0):
                     merged[cand] = p
 

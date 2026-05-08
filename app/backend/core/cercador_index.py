@@ -151,6 +151,16 @@ class CercadorIndex:
 
     EXACT_PHRASE_BOOST = 50.0
 
+    # Reconstructed-sentence exact-phrase boost. We enumerate the top
+    # full-sentence reconstructions of the query (cartesian product of
+    # Parser2's per-word alts, beam-pruned by joint probability) and
+    # apply the same EXACT_PHRASE_BOOST to any exact match. Catches
+    # "bog per tu" → "boig per tu" hitting the song title, which the
+    # literal-q_norm boost misses entirely.
+    RECONSTRUCT_TOP_PER_WORD   = 3     # per-word fan-out into the beam
+    RECONSTRUCT_BEAM_K         = 32    # max sentences kept per beam step
+    RECONSTRUCT_MIN_JOINT_PROB = 0.05  # drop reconstructions below this
+
     def __init__(self):
         self.songs:    list[dict] = []
         self.grups:    list[dict] = []
@@ -323,6 +333,23 @@ class CercadorIndex:
         for i in self.noticies_phrase.get(q_norm, ()):
             noticia_scores[i] += self.EXACT_PHRASE_BOOST
 
+        # Reconstruction-based exact-phrase boost. Same EXACT_PHRASE_BOOST
+        # for any reconstruction that exact-matches a phrase index — the
+        # joint-probability floor inside _enumerate_reconstructions has
+        # already gated which combinations are "high enough probability"
+        # to consider, so survivors all deserve the full boost.
+        for phrase, _jp in self._enumerate_reconstructions(query):
+            if phrase == q_norm:
+                continue  # already covered by the literal-q_norm pass above
+            for i in self.grups_phrase.get(phrase, ()):
+                grup_scores[i] += self.EXACT_PHRASE_BOOST
+            for i in self.songs_title_phrase.get(phrase, ()):
+                song_scores[i] += self.EXACT_PHRASE_BOOST
+            for i in self.songs_artist_phrase.get(phrase, ()):
+                song_scores[i] += self.EXACT_PHRASE_BOOST * 0.5
+            for i in self.noticies_phrase.get(phrase, ()):
+                noticia_scores[i] += self.EXACT_PHRASE_BOOST
+
         # Phrase-edit-distance rerank over the top candidates of each
         # collection. This recovers the signal Parser2's _phrase_match used
         # to provide (e.g. "bog per tu" boosting "boig per tu" specifically),
@@ -366,6 +393,54 @@ class CercadorIndex:
             ),
             "parsed": parsed,
         }
+
+    def _enumerate_reconstructions(self, query: str) -> list[tuple[str, float]]:
+        """
+        Top full-sentence reconstructions of `query`, ranked by joint
+        per-word probability. Beam-searches over Parser2's per-word
+        distributions so a query like "bog per tu" yields
+        ("boig per tu", 0.85), ("bog per tu", 0.10), ...
+
+        The beam holds (phrase, log_prob) so joint = product of per-word
+        probs stays numerically stable on long queries. Width is
+        RECONSTRUCT_BEAM_K — that's the budget on full sentences we'll
+        bother to exact-match. Per-word fan-out is capped at
+        RECONSTRUCT_TOP_PER_WORD so a noisy distribution can't blow up
+        the beam in a single step. Reconstructions whose joint
+        probability falls below RECONSTRUCT_MIN_JOINT_PROB are dropped
+        before returning — that's the "high enough probability" gate.
+
+        Output phrases are already normalised (parser2 candidates come
+        from a normalised lexicon plus the input itself, which the
+        parser normalises at parse time), so callers can use them as
+        keys into the *_phrase indices directly.
+        """
+        per_word = self.parser.parse_per_word(query)
+        if not per_word:
+            return []
+        # Beam: list of (phrase, log_prob). Seed with the empty prefix
+        # at log_prob = 0, then expand one word position at a time.
+        beam: list[tuple[str, float]] = [("", 0.0)]
+        for dist in per_word:
+            top_alts = sorted(dist.items(), key=lambda kv: -kv[1])[
+                : self.RECONSTRUCT_TOP_PER_WORD
+            ]
+            next_beam: list[tuple[str, float]] = []
+            for phrase, lp in beam:
+                for cand, p in top_alts:
+                    if p <= 0.0:
+                        continue
+                    new_phrase = f"{phrase} {cand}" if phrase else cand
+                    next_beam.append((new_phrase, lp + math.log(p)))
+            next_beam.sort(key=lambda x: -x[1])
+            beam = next_beam[: self.RECONSTRUCT_BEAM_K]
+        floor = self.RECONSTRUCT_MIN_JOINT_PROB
+        return [
+            (phrase, jp)
+            for phrase, lp in beam
+            for jp in (math.exp(lp),)
+            if jp >= floor
+        ]
 
     @staticmethod
     def _phrase_rerank(
