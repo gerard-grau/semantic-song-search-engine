@@ -1,28 +1,27 @@
 """
-Console REPL for parser2 against the *real* catalog (the same titles,
-artists, group names and news titles the live backend loads).
+Console REPL for parser2.
+
+Loads only the wordfreq Catalan lexicon (parser2 is lexicon-only — no
+catalog) and lets you type queries to inspect the probability
+distribution the parser produces.
 
 Run from the project root:
     python3 test_parser2.py
 
 Commands inside the REPL:
     <query>          → parse the query, show ranked candidates
-    !info <word>     → membership + frequency for a single word
-    !cat <substring> → list catalog tokens containing a substring
+    !info <word>     → lexicon membership / frequency for one word
     !q / !quit       → exit
 """
 
 from __future__ import annotations
 
-import math
 import sys
 import time
 
-from app.backend.core.cercador_index import get_index
 from app.backend.core.parser2 import (
     MAX_WORD_DISTANCE,
-    _fold,
-    distance_to_prob,
+    Parser2,
     edit_distance,
     freq_factor,
     normalize,
@@ -30,102 +29,93 @@ from app.backend.core.parser2 import (
 )
 
 
-def _regime(in_cat: bool, freq: int) -> str:
-    """
-    Word-fuzzy is lexicon-only now. We still report catalog membership
-    here (for diagnostic context) but it doesn't affect scoring.
-    """
-    if freq <= 0:
-        return "OOV (not in lexicon)" + (" — but in catalog" if in_cat else "")
-    return "lexicon" + (" + catalog" if in_cat else "")
+def _kind(cand: str) -> str:
+    return "pair" if " " in cand else "word"
 
 
-def explain(parser, query: str) -> None:
+def explain(parser: Parser2, query: str) -> None:
     q_norm = normalize(query)
     words = tokenize(q_norm)
 
     t0 = time.perf_counter()
-    parsed = parser.parse(query, phrase_match=False)
+    parsed = parser.parse(query)
     dt_ms = (time.perf_counter() - t0) * 1000
 
     print(f"\n  normalized: {q_norm!r}   tokens: {words}   ({dt_ms:.1f} ms)")
-    print(f"  → {len(parsed)} candidate(s):\n")
-
+    print(f"  → {len(parsed)} candidate(s) (probabilities sum to 1 per "
+          f"input word, max-merged across words):\n")
     if not parsed:
         print("    (none)")
         return
 
-    print(f"    {'word':<22}{'p':>6}  {'in_cat':<7}{'freq':>7}  "
-          f"{'ff':>5}  {'min_d':>6}  regime")
-    print("    " + "-" * 86)
+    print(f"    {'candidate':<24}{'p':>7}  {'freq':>9}  {'ff':>5}  "
+          f"{'min_d':>6}  type")
+    print("    " + "-" * 78)
     for cand, p in parsed.items():
-        in_cat = cand in parser.catalog_tokens
-        freq = parser.lexicon.get(cand, 0)
-        ff = freq_factor(freq) if freq > 0 else 0.0
-        # Closest input word, just so the user can see why this candidate
-        # surfaced for this query.
-        d = min(
-            (edit_distance(w, cand, cap=MAX_WORD_DISTANCE) for w in words),
-            default=0.0,
-        )
-        print(f"    {cand:<22}{p:>6.3f}  {str(in_cat):<7}{freq:>7}  "
-              f"{ff:>5.2f}  {d:>6.2f}  {_regime(in_cat, freq)}")
+        if " " in cand:
+            # Pair: report the worse half so it's obvious which side is
+            # holding the joint probability down.
+            halves = cand.split(" ")
+            freqs = [parser.lexicon.get(h, 0) for h in halves]
+            freq_disp = "/".join(str(f) for f in freqs)
+            ff_min = min(freq_factor(f) for f in freqs)
+            d_disp = "—"
+            print(f"    {cand:<24}{p:>7.4f}  {freq_disp:>9}  "
+                  f"{ff_min:>5.2f}  {d_disp:>6}  pair")
+        else:
+            f = parser.lexicon.get(cand, 0)
+            freq_disp = str(f) if f > 0 else "OOV"
+            ff_disp = freq_factor(f) if f > 0 else freq_factor(parser._oov_freq())
+            min_d = min(
+                (edit_distance(w, cand, cap=MAX_WORD_DISTANCE) for w in words),
+                default=0.0,
+            )
+            print(f"    {cand:<24}{p:>7.4f}  {freq_disp:>9}  "
+                  f"{ff_disp:>5.2f}  {min_d:>6.2f}  word")
 
 
-def info(parser, word: str) -> None:
+def info(parser: Parser2, word: str) -> None:
     w = normalize(word)
-    in_cat = w in parser.catalog_tokens
     freq = parser.lexicon.get(w, 0)
     print(f"\n    word:        {w!r}")
-    print(f"    in_catalog:  {in_cat}  (informational — not used in scoring)")
-    print(f"    lexicon[w]:  {freq}")
-    print(f"    freq_factor: {freq_factor(freq):.3f}")
-    print(f"    folded:      {_fold(w)!r}")
-    print(f"    regime:      {_regime(in_cat, freq)}")
+    print(f"    in_lexicon:  {freq > 0}")
+    if freq > 0:
+        print(f"    lexicon[w]:  {freq}")
+        print(f"    freq_factor: {freq_factor(freq):.3f}")
+    else:
+        oov = parser._oov_freq()
+        print(f"    OOV — would use synthetic prior: "
+              f"freq={oov:.2f}, ff={freq_factor(oov):.3f}")
 
 
-def cat_search(parser, substring: str, limit: int = 40) -> None:
-    sub = substring.lower()
-    hits = sorted(t for t in parser.catalog_tokens if sub in t)
-    print(f"\n    {len(hits)} catalog tokens containing {sub!r}:")
-    for t in hits[:limit]:
-        freq = parser.lexicon.get(t, 0)
-        print(f"      {t}    (lex_freq={freq})")
-    if len(hits) > limit:
-        print(f"      … ({len(hits) - limit} more)")
-
-
-def main() -> None:
-    print("Building real catalog + lexicon (this can take ~30-90 s on first run)…")
+def main() -> int:
+    print("Loading wordfreq Catalan lexicon (~50k words)…")
     t0 = time.time()
-    parser = get_index().parser
-    print(f"Ready in {time.time() - t0:.1f}s — "
-          f"{len(parser.catalog_tokens):,} catalog tokens, "
-          f"{len(parser.lexicon):,} lexicon words.\n")
+    parser = Parser2()
+    parser.load_lexicon(min_zipf=2.4)
+    print(f"Ready in {time.time() - t0:.1f}s — {len(parser.lexicon):,} words.\n")
 
-    print("Type a query, or one of:")
-    print("  !info <word>    — show membership + freq for one word")
-    print("  !cat <sub>      — list catalog tokens containing <sub>")
+    print("Commands:")
+    print("  <query>         — parse, show candidate probabilities")
+    print("  !info <word>    — lexicon membership / frequency")
     print("  !q / !quit      — exit")
+    print()
 
     while True:
         try:
             line = input(">> ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
-            return
+            return 0
         if not line:
             continue
         if line in ("!q", "!quit", "q", "quit", "exit"):
-            return
+            return 0
         if line.startswith("!info "):
             info(parser, line[len("!info "):].strip())
-            continue
-        if line.startswith("!cat "):
-            cat_search(parser, line[len("!cat "):].strip())
             continue
         explain(parser, line)
 
 
 if __name__ == "__main__":
-    sys.exit(main() or 0)
+    sys.exit(main())

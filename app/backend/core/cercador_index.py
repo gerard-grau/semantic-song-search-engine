@@ -194,22 +194,28 @@ class CercadorIndex:
             len(self.songs), len(self.grups), len(self.noticies), time.time() - t0,
         )
 
-        # Catalog for the parser: every unique title + artist + grup name +
-        # noticia title. Parser2 dedupes internally.
+        # Lexicon for the parser. Parser2 is lexicon-only — it does NOT
+        # use catalog data for scoring. We still keep a local set of
+        # catalog tokens (built below) so `derive_correction` can answer
+        # "is this query word a known band/song token?" without proposing
+        # a spelling fix for it.
         t0 = time.time()
-        catalog_entries: list[dict] = []
-        for s in self.songs:
-            catalog_entries.append({"title": s.get("title", ""), "artist": s.get("artist", "")})
-        for g in self.grups:
-            catalog_entries.append({"title": "", "artist": g["name"]})
-        for n in self.noticies:
-            catalog_entries.append({"title": n["title"], "artist": ""})
-        self.parser.load_catalog(catalog_entries)
         try:
             self.parser.load_lexicon(min_zipf=2.4)
         except Exception as exc:  # wordfreq not installed → degrade gracefully
             logger.warning("[cercador] lexicon unavailable: %s", exc)
-        logger.info("[cercador] parser ready in %.1fs", time.time() - t0)
+        self.catalog_tokens: set[str] = set()
+        for s in self.songs:
+            self.catalog_tokens.update(tokenize(normalize(s.get("title", ""))))
+            self.catalog_tokens.update(tokenize(normalize(s.get("artist", ""))))
+        for g in self.grups:
+            self.catalog_tokens.update(tokenize(normalize(g.get("name", ""))))
+        for n in self.noticies:
+            self.catalog_tokens.update(tokenize(normalize(n.get("title", ""))))
+        logger.info(
+            "[cercador] parser ready in %.1fs (%d catalog tokens)",
+            time.time() - t0, len(self.catalog_tokens),
+        )
 
         # Build inverted indices.
         t0 = time.time()
@@ -466,24 +472,26 @@ class CercadorIndex:
 def derive_correction(
     query: str,
     parsed: dict[str, float],
-    parser: "Parser2",
+    index: "CercadorIndex",
     min_alt_prob: float = 0.6,
     lexicon_freq_floor: int = 200,
 ) -> dict | None:
     """
-    Reverse-engineer a per-word correction string from Parser2's bag-of-
-    words output. We only propose a fix for words that are NOT in the
-    catalog and NOT a common Catalan word — otherwise every correctly
-    typed query would be "corrected" to its nearest one-edit neighbour
+    Reverse-engineer a per-word correction string from Parser2's
+    output. We only propose a fix for words that are NOT in the catalog
+    AND NOT a common Catalan word — otherwise every correctly typed
+    query would be "corrected" to its nearest one-edit neighbour
     ("boig per tu" → "goig pre tú").
+
+    catalog_tokens lives on the index now (parser2 is lexicon-only).
     """
     q_norm = normalize(query)
     input_words = tokenize(q_norm)
     if not input_words:
         return None
     input_set = set(input_words)
-    catalog_tokens = parser.catalog_tokens
-    lexicon = parser.lexicon
+    catalog_tokens = index.catalog_tokens
+    lexicon = index.parser.lexicon
 
     def _word_is_known(w: str) -> bool:
         if w in catalog_tokens:
@@ -498,6 +506,10 @@ def derive_correction(
         alts: list[tuple[str, float]] = []
         for cand, prob in parsed.items():
             if cand == w or cand in input_set:
+                continue
+            # Skip pair-of-words candidates ("molt be") — they're useful
+            # for retrieval but not for per-word correction.
+            if " " in cand:
                 continue
             d = edit_distance(w, cand, cap=MAX_WORD_DISTANCE)
             if 0 < d <= MAX_WORD_DISTANCE:

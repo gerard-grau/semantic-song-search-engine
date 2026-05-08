@@ -72,7 +72,7 @@ def cercador_search(q: str = ""):
     index = get_index()
     hits = index.search(q)
 
-    correction = derive_correction(q, hits["parsed"], index.parser)
+    correction = derive_correction(q, hits["parsed"], index)
 
     return {
         "grups":      [_grup_result(g)    for g in hits["grups"]],
