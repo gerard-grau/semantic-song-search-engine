@@ -99,7 +99,7 @@ from functools import lru_cache
 COST_SWAP        = 0.5    # adjacent transposition (e.g. amro ↔ amor)
 COST_INSERT      = 1.0    # input is missing a char
 COST_DELETE      = 1.0    # input has an extra char
-COST_SUB_ADJ     = 0.7    # substitution: keys are adjacent on QWERTY
+COST_SUB_ADJ     = 0.85   # substitution: keys are adjacent on QWERTY
 COST_SUB_FAR     = 1.5    # substitution: keys are not adjacent
 COST_ACCENT      = 0.1    # accent-only / fold-equivalent / middle-dot
 COST_SPACE       = 2.0    # explicit space — splits handled separately,
@@ -133,6 +133,16 @@ SOFTMAX_T        = 0.10
 # corrections instead of degenerating into noise).
 KEEP_TOP_N       = 3
 PROB_FLOOR       = 0.20
+
+# Floor on the input word's *raw* probability (i.e. before softmax /
+# trim / renormalise). Niche real words ('garsa', dialect, proper
+# nouns…) might not be in wordfreq at all and would otherwise have
+# raw ≈ 0.11. Bumping the raw value to INPUT_RAW_FLOOR before the
+# softmax means the boost scales naturally with the alternates'
+# strength: if a correction is overwhelming the boost gets crushed
+# anyway (input still ~0%); if the alternates are all weak (every
+# candidate two mistakes away), the input stays competitive.
+INPUT_RAW_FLOOR  = 0.20
 
 # freq_factor reference. log1p(freq)/log1p(FREQ_REF) saturates at 1.0 when
 # freq ≥ FREQ_REF (≈ zipf 5).
@@ -172,13 +182,15 @@ def _fold(text: str) -> str:
 
 
 def _qwerty_adjacent(fa: str, fb: str) -> bool:
-    """True if two folded characters sit on directly adjacent QWERTY keys —
-    one step horizontally OR one step vertically, NOT diagonal. So g/h, g/f
-    and g/b count, but g/n (diagonal) does not. Unknown chars never count."""
+    """True if two folded characters sit on horizontally adjacent QWERTY
+    keys — same row, one column apart. Vertical neighbours (g/t, g/b) and
+    diagonals (g/n, g/y) do NOT count — typo slips most often move the
+    finger left or right along the home row, not up or down to a different
+    row. Unknown characters never count as adjacent."""
     pa, pb = _KEY_POS.get(fa), _KEY_POS.get(fb)
     if pa is None or pb is None:
         return False
-    return abs(pa[0] - pb[0]) + abs(pa[1] - pb[1]) == 1
+    return pa[0] == pb[0] and abs(pa[1] - pb[1]) == 1
 
 
 @lru_cache(maxsize=16384)
@@ -382,12 +394,12 @@ class Parser2:
     # ------------------------------------------------------------------
 
     def _oov_freq(self) -> float:
-        """Synthetic frequency for OOV input: half of the lexicon's
-        minimum, so by construction lower than any real entry. Falls
-        back to 0.5 if the lexicon hasn't been loaded."""
-        if not self.lexicon:
-            return 0.5
-        return min(self.lexicon.values()) / 2.0
+        """Synthetic frequency for OOV input. Treated the same as the
+        rarest real entry (freq = 1) — the assumption is that an OOV
+        word is at least as common as the lexicon's tail, since it
+        appeared in real usage (the user typed it). The pre-norm input
+        floor (INPUT_RAW_FLOOR) handles the rest."""
+        return 1.0
 
     def _candidates_for_word(self, word: str) -> dict[str, float]:
         """
@@ -408,10 +420,14 @@ class Parser2:
         """
         raw: dict[str, float] = {}
 
-        # 1. Input word itself.
+        # 1. Input word itself. exp(0) = 1, so raw[word] is just the
+        #    freq factor. We then apply the pre-normalisation floor
+        #    INPUT_RAW_FLOOR — niche real words don't get crushed when
+        #    every alternate is also weak, but a strong correction will
+        #    still dominate after softmax.
         in_lex = self.lexicon.get(word, 0)
         input_freq = in_lex if in_lex > 0 else self._oov_freq()
-        raw[word] = freq_factor(input_freq)            # exp(0) = 1
+        raw[word] = max(freq_factor(input_freq), INPUT_RAW_FLOOR)
 
         # 2. Fuzzy lexicon matches.
         wlen = len(word)
