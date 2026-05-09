@@ -67,3 +67,4 @@ app/backend/data/augmented_songs.csv
 app/backend/data/embedded_songs.parquet
 app/backend/data/embedded_songs_2d.parquet
 app/backend/data/*
+claude_start.sh
