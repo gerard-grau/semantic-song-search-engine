@@ -76,15 +76,21 @@ export default function Scatter2D({
       initedRef.current = true
     }
 
-    const { zoom } = viewRef.current
     const hasFilter = activeIds != null
-    const NODE_R = 7  // constant radius for all nodes
+    // Screen-space radius: dots stay the same visual size at any zoom.
+    // Only the world positions move when zooming (handled by pointToScreen).
+    const NODE_R = 5
+
+    // Read theme-aware label colors from CSS tokens so canvas matches the page.
+    const cs = getComputedStyle(document.documentElement)
+    const labelInk = cs.getPropertyValue('--ink').trim() || '#15151A'
+    const labelMute = cs.getPropertyValue('--ink-soft').trim() || '#5D6D7E'
 
     // Helper to draw a node in the design style
     function drawNode(p, opacity, isHovered, isFocal) {
       const { x: px, y: py } = pointToScreen(p, bt)
       const color = genreColor(p.genre)
-      const r = NODE_R * zoom
+      const r = NODE_R
 
       if (isFocal) {
         // Diamond shape for focal song
@@ -92,7 +98,7 @@ export default function Scatter2D({
 
         // Outer ring
         ctx.beginPath()
-        ctx.arc(px, py, r * 2.2, 0, Math.PI * 2)
+        ctx.arc(px, py, r * 2.4, 0, Math.PI * 2)
         ctx.strokeStyle = color
         ctx.globalAlpha = 0.35
         ctx.lineWidth = 1.5
@@ -100,7 +106,7 @@ export default function Scatter2D({
         ctx.globalAlpha = 1
 
         // Diamond
-        const s = r * 0.85
+        const s = r * 1.1
         ctx.save()
         ctx.translate(px, py)
         ctx.rotate(Math.PI / 4)
@@ -113,16 +119,16 @@ export default function Scatter2D({
         ctx.stroke()
         ctx.restore()
 
-        // Label
-        const labelSz = Math.round(Math.max(11, 13 * zoom))
-        ctx.font = `bold ${labelSz}px system-ui, sans-serif`
+        // Label (constant size)
+        const labelSz = 13
+        ctx.font = `600 ${labelSz}px Inter, system-ui, sans-serif`
         ctx.textAlign = 'center'
         ctx.fillStyle = color
-        ctx.fillText(p.title, px, py - r * 2.5 - 4)
-        const subSz = Math.round(labelSz * 0.8)
-        ctx.font = `${subSz}px system-ui, sans-serif`
-        ctx.globalAlpha = 0.6
-        ctx.fillText(`${p.artist}`, px, py - r * 2.5 - 4 - labelSz - 2)
+        ctx.fillText(p.title, px, py - r * 2.8 - 4)
+        const subSz = 11
+        ctx.font = `${subSz}px Inter, system-ui, sans-serif`
+        ctx.fillStyle = labelMute
+        ctx.fillText(`${p.artist}`, px, py - r * 2.8 - 4 - labelSz - 2)
         ctx.globalAlpha = 1
         return
       }
@@ -130,41 +136,40 @@ export default function Scatter2D({
       if (isHovered) {
         ctx.globalAlpha = 1
 
-        // Glow halo
+        // Glow halo (screen-space constant)
         ctx.beginPath()
-        ctx.arc(px, py, (r + 8) * zoom, 0, Math.PI * 2)
+        ctx.arc(px, py, r + 10, 0, Math.PI * 2)
         ctx.fillStyle = color
-        ctx.globalAlpha = 0.15
+        ctx.globalAlpha = 0.14
         ctx.fill()
 
         // Outer soft ring
         ctx.beginPath()
-        ctx.arc(px, py, r + 5 * zoom, 0, Math.PI * 2)
+        ctx.arc(px, py, r + 5, 0, Math.PI * 2)
         ctx.fillStyle = color
-        ctx.globalAlpha = 0.25
+        ctx.globalAlpha = 0.28
         ctx.fill()
 
-        // Main circle
+        // Main circle (slightly larger on hover)
         ctx.beginPath()
-        ctx.arc(px, py, r, 0, Math.PI * 2)
+        ctx.arc(px, py, r + 1, 0, Math.PI * 2)
         ctx.fillStyle = color
         ctx.globalAlpha = 1
         ctx.fill()
         ctx.strokeStyle = '#fff'
-        ctx.lineWidth = 2.5
+        ctx.lineWidth = 2
         ctx.stroke()
 
-        // Label
-        const labelSz = Math.round(Math.max(10, 13 * zoom))
-        ctx.font = `bold ${labelSz}px system-ui, sans-serif`
+        // Label (constant size)
+        const labelSz = 13
+        ctx.font = `600 ${labelSz}px Inter, system-ui, sans-serif`
         ctx.textAlign = 'center'
-        ctx.fillStyle = color
-        ctx.fillText(p.title, px, py - r - 10)
-        const subSz = Math.round(labelSz * 0.8)
-        ctx.font = `${subSz}px system-ui, sans-serif`
-        ctx.globalAlpha = 0.6
-        ctx.fillStyle = '#e8e0d0'
-        ctx.fillText(`${p.artist} · ${p.year || ''}`, px, py - r - 10 - labelSz - 2)
+        ctx.fillStyle = labelInk
+        ctx.fillText(p.title, px, py - r - 12)
+        const subSz = 11
+        ctx.font = `${subSz}px Inter, system-ui, sans-serif`
+        ctx.fillStyle = labelMute
+        ctx.fillText(`${p.artist} · ${p.year || ''}`, px, py - r - 12 - labelSz - 2)
         ctx.globalAlpha = 1
         return
       }
@@ -175,7 +180,7 @@ export default function Scatter2D({
       if (isActive) {
         // Soft outer ring for active nodes
         ctx.beginPath()
-        ctx.arc(px, py, r + 4 * zoom, 0, Math.PI * 2)
+        ctx.arc(px, py, r + 3, 0, Math.PI * 2)
         ctx.fillStyle = color
         ctx.globalAlpha = 0.08
         ctx.fill()
@@ -185,11 +190,11 @@ export default function Scatter2D({
       ctx.beginPath()
       ctx.arc(px, py, r, 0, Math.PI * 2)
       ctx.fillStyle = color
-      ctx.globalAlpha = isActive ? 0.85 : 0.4
+      ctx.globalAlpha = isActive ? 0.88 : 0.35
       ctx.fill()
       ctx.strokeStyle = color
       ctx.lineWidth = isActive ? 1.5 : 1
-      ctx.globalAlpha = isActive ? 0.7 : 0.5
+      ctx.globalAlpha = isActive ? 0.65 : 0.4
       ctx.stroke()
 
       ctx.globalAlpha = 1
@@ -247,8 +252,9 @@ export default function Scatter2D({
   }
 
   function findClosestPoint(mx, my) {
+    // Screen-space hit radius — independent of zoom, matches the new constant dot size.
     let closest = null
-    let closestDist = 20 * viewRef.current.zoom
+    let closestDist = 14
     for (const p of points) {
       const sp = getScreenPos(p)
       const dist = Math.hypot(mx - sp.x, my - sp.y)

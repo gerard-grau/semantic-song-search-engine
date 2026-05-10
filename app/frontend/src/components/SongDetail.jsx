@@ -20,7 +20,11 @@ export default function SongDetail({ songId, onClose }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-content" onClick={e => e.stopPropagation()}>
-        <button className="modal-close" onClick={onClose}>✕</button>
+        <button className="modal-close" onClick={onClose} aria-label="Tancar">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
 
         {loading ? (
           <div className="modal-loading">Carregant...</div>
@@ -50,7 +54,10 @@ export default function SongDetail({ songId, onClose }) {
 
             {song.url && (
               <a href={song.url} target="_blank" rel="noopener noreferrer" className="modal-link">
-                Veure a Viasona ↗
+                Veure a Viasona
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M7 17 17 7M9 7h8v8" />
+                </svg>
               </a>
             )}
           </>

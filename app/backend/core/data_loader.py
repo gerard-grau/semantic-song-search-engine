@@ -101,6 +101,38 @@ def _parquet_ids(path: Path) -> set[int]:
     return {int(x) for x in table.column("id_lyrics").to_pylist()}
 
 
+def _parquet_ids_ordered(path: Path) -> list[int]:
+    """Like ``_parquet_ids`` but preserves the parquet's row order."""
+    if not path.exists():
+        return []
+    table = pq.read_table(path, columns=["id_lyrics"])
+    return [int(x) for x in table.column("id_lyrics").to_pylist()]
+
+
+# ---------------------------------------------------------------------------
+# Visible-set selection
+# ---------------------------------------------------------------------------
+
+# Hard cap on the number of songs the frontend visualizes at once.
+# All songs are still embedded + projected to 2D in the parquets — this only
+# limits what we hand to the UI to keep the scatter plot legible.
+VISIBLE_SONG_LIMIT = 5000
+
+
+def select_top_songs(songs: list[dict], limit: int = VISIBLE_SONG_LIMIT) -> list[dict]:
+    """
+    Pick the songs that get displayed in the visualization.
+
+    Placeholder implementation: returns the first ``limit`` songs in the
+    order they were passed in (i.e. parquet row order). Will eventually
+    rank by popularity / freshness / curation signals — keep the signature
+    stable so callers don't change.
+    """
+    if limit is None or limit <= 0 or len(songs) <= limit:
+        return list(songs)
+    return list(songs[:limit])
+
+
 # ---------------------------------------------------------------------------
 # CSV streamer (fallback when songs_meta.parquet is missing)
 # ---------------------------------------------------------------------------
@@ -298,13 +330,19 @@ def load_all_songs() -> list[dict]:
 
 
 def load_visible_songs() -> list[dict]:
-    """Metadata for the songs that have a 2D projection. Cached."""
+    """
+    Metadata for the songs displayed in the visualization. Cached.
+
+    Reads ``embedded_songs_2d.parquet`` in row order, resolves metadata,
+    and then runs ``select_top_songs`` to cap the result at the visible
+    limit (default 5000).
+    """
     global _visible_metadata_cache, _visible_id_index
     if _visible_metadata_cache is not None:
         return _visible_metadata_cache
 
-    visible_ids = _parquet_ids(_PARQUET_2D)
-    if not visible_ids:
+    ordered_ids = _parquet_ids_ordered(_PARQUET_2D)
+    if not ordered_ids:
         logger.warning("No 2D parquet at %s — load_visible_songs() returns [].", _PARQUET_2D)
         _visible_metadata_cache = []
         _visible_id_index = {}
@@ -312,9 +350,13 @@ def load_visible_songs() -> list[dict]:
 
     _ensure_all_metadata()
     assert _all_id_index is not None  # populated by _ensure_all_metadata
-    _visible_metadata_cache = [_all_id_index[i] for i in visible_ids if i in _all_id_index]
+    full_visible = [_all_id_index[i] for i in ordered_ids if i in _all_id_index]
+    _visible_metadata_cache = select_top_songs(full_visible)
     _visible_id_index = {s["id"]: s for s in _visible_metadata_cache}
-    logger.info("Resolved %d visible songs.", len(_visible_metadata_cache))
+    logger.info(
+        "Resolved %d visible songs (of %d projected, cap=%d).",
+        len(_visible_metadata_cache), len(full_visible), VISIBLE_SONG_LIMIT,
+    )
     return _visible_metadata_cache
 
 

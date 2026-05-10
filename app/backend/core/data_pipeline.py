@@ -12,10 +12,11 @@ Two outputs:
   start-up (and on every first ``/api/songs`` call).
 
 Usage:
-    .venv/bin/python -m app.backend.core.data_pipeline                       # all artefacts
-    .venv/bin/python -m app.backend.core.data_pipeline --skip-meta           # only 2D
-    .venv/bin/python -m app.backend.core.data_pipeline --only-meta           # only metadata snapshot
+    .venv/bin/python -m app.backend.core.data_pipeline                              # all artefacts
+    .venv/bin/python -m app.backend.core.data_pipeline --skip-meta                  # only 2D
+    .venv/bin/python -m app.backend.core.data_pipeline --only-meta                  # only metadata snapshot
     .venv/bin/python -m app.backend.core.data_pipeline --method tsne --pca-dim 50
+    .venv/bin/python -m app.backend.core.data_pipeline --method pca_umap --pca-dim 4
 """
 
 from __future__ import annotations
@@ -101,6 +102,37 @@ def _project_tsne(matrix: np.ndarray, pca_dim: int | None) -> np.ndarray:
     ).fit_transform(matrix)
 
 
+def _project_pca_umap(matrix: np.ndarray, pca_dim: int) -> np.ndarray:
+    """
+    Two-stage projection: PCA reduces the embedding to ``pca_dim`` dims
+    (linear, fast, kills curse-of-dimensionality noise), then UMAP collapses
+    that to 2D while preserving local structure. Empirically gives more
+    spread-out, less cluttered maps than UMAP alone on high-dim embeddings.
+    """
+    try:
+        import umap  # type: ignore
+    except ImportError as exc:
+        raise ImportError(
+            "umap-learn is not installed. Run `pip install umap-learn`."
+        ) from exc
+
+    n, d = matrix.shape
+    target = max(2, min(pca_dim, d, n))
+    if target < d and n > target:
+        logger.info("PCA pre-reduction → %d dims (from %d)", target, d)
+        matrix = PCA(n_components=target, random_state=42).fit_transform(matrix)
+    else:
+        logger.info("Skipping PCA (n=%d, d=%d, target=%d).", n, d, target)
+
+    n_neighbors = max(2, min(15, n - 1))
+    logger.info("Running UMAP on %d × %d points (n_neighbors=%d)…",
+                matrix.shape[0], matrix.shape[1], n_neighbors)
+    return umap.UMAP(
+        n_components=2, n_neighbors=n_neighbors, min_dist=0.1,
+        metric="euclidean", random_state=42,
+    ).fit_transform(matrix)
+
+
 def _project_to_2d(matrix: np.ndarray, method: str, pca_dim: int | None) -> np.ndarray:
     n = matrix.shape[0]
     if n <= 1:
@@ -110,8 +142,12 @@ def _project_to_2d(matrix: np.ndarray, method: str, pca_dim: int | None) -> np.n
         coords = _project_umap(matrix)
     elif method == "tsne":
         coords = _project_tsne(matrix, pca_dim=pca_dim)
+    elif method in ("pca_umap", "pca+umap", "pcaumap"):
+        coords = _project_pca_umap(matrix, pca_dim=pca_dim if pca_dim else 50)
     else:
-        raise ValueError(f"Unknown method: {method!r}. Use 'umap' or 'tsne'.")
+        raise ValueError(
+            f"Unknown method: {method!r}. Use 'umap', 'tsne' or 'pca_umap'."
+        )
     return coords.astype(np.float32)
 
 
@@ -186,7 +222,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="Generate API artefacts from embeddings.")
     p.add_argument("--limit",  type=int, default=-1, help="Number of songs to project (-1 = all).")
-    p.add_argument("--method", choices=["umap", "tsne"], default="umap")
+    p.add_argument("--method", choices=["umap", "tsne", "pca_umap"], default="umap")
     p.add_argument("--pca-dim", type=int, default=50, help="PCA pre-reduction for t-SNE (0 disables).")
     p.add_argument("--skip-meta", action="store_true", help="Skip metadata snapshot.")
     p.add_argument("--only-meta", action="store_true", help="Only build the metadata snapshot.")

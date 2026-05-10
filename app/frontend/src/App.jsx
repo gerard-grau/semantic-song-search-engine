@@ -217,10 +217,21 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <div className="header-left">
-          <button className="header-home-btn" onClick={() => setPage('welcome')}>← Inici</button>
-          <h1 className="header-title">Descobridor de Cançons</h1>
+          <button className="header-home-btn" onClick={() => setPage('welcome')}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+            Inici
+          </button>
+          <span className="header-divider" />
+          <h1 className="header-title">
+            <em>Descobridor</em>
+          </h1>
         </div>
-        <ThemeToggle theme={theme} onToggle={toggleTheme} />
+        <div className="header-right">
+          <button className="header-link-btn" onClick={() => setPage('cercador')}>Cercador</button>
+          <ThemeToggle theme={theme} onToggle={toggleTheme} inline />
+        </div>
       </header>
 
       {error && <div className="error-banner">{error}</div>}
@@ -250,11 +261,13 @@ export default function App() {
 
           <div className="viz-bar viz-bar--controls">
             <span className="viz-count">
-              {similarToId
-                ? `${activeCount} cançons similars`
-                : activeIds
-                  ? `${activeCount} / ${allSongs.length} cançons`
-                  : `${allSongs.length} cançons`}
+              {similarToId ? (
+                <><strong>{activeCount}</strong> cançons similars</>
+              ) : activeIds ? (
+                <><strong>{activeCount}</strong> / {allSongs.length} cançons</>
+              ) : (
+                <><strong>{allSongs.length}</strong> cançons al mapa</>
+              )}
             </span>
           </div>
 

@@ -17,12 +17,14 @@ export default function SongShowcase({ songs, onSongClick }) {
     <div className="showcase">
       <div className="showcase-header">
         <h2 className="showcase-title">
-          {songs.length === 1 ? 'La teva cançó!' : `Les teves ${songs.length} cançons finalistes`}
+          {songs.length === 1
+            ? <>La teva <em>cançó</em></>
+            : <>Les teves {songs.length} <em>finalistes</em></>}
         </h2>
         <p className="showcase-subtitle">
           {songs.length === 1
-            ? 'Hem trobat la cançó perfecta per tu.'
-            : 'Aquestes cançons han sobreviscut tots els filtres.'}
+            ? "Hem trobat la cançó perfecta per a tu."
+            : "Aquestes cançons han sobreviscut tots els filtres."}
         </p>
       </div>
 

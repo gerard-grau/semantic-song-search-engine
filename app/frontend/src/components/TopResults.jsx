@@ -2,78 +2,99 @@ import { useState } from 'react'
 import { GENRE_COLORS } from './visualizations/genreColors'
 
 export default function TopResults({ songs, message, query, onSongHover, onSongClick, highlightedId }) {
-  const [visibleCount, setVisibleCount] = useState(10)
+  const [visibleCount, setVisibleCount] = useState(12)
 
-  // Reset visible count when songs list changes
   const visible = songs.slice(0, visibleCount)
   const hasMore = songs.length > visibleCount
 
   function handleShowMore() {
-    setVisibleCount(prev => prev + 10)
+    setVisibleCount(prev => prev + 12)
   }
 
   return (
     <div className="top-results">
-      <h2 className="results-title">
-        {query ? `Resultats per "${query}"` : 'Totes les cançons'}
+      <header className="results-head">
+        <div className="results-head-titles">
+          <span className="results-eyebrow">
+            {query ? 'Resultats' : 'Catàleg'}
+          </span>
+          <h2 className="results-title">
+            {query
+              ? <>Per <em>«{query}»</em></>
+              : <>Totes les <em>cançons</em></>}
+          </h2>
+        </div>
         <span className="results-badge">{songs.length}</span>
-      </h2>
+      </header>
 
       {message && <div className="results-message">{message}</div>}
 
-      <div className="results-list">
-        {visible.map((song, idx) => (
-          <div
-            key={song.id}
-            className={`result-card ${highlightedId === song.id ? 'result-card--active' : ''}`}
-            onMouseEnter={() => onSongHover(song.id)}
-            onMouseLeave={() => onSongHover(null)}
-            onClick={() => onSongClick(song.id)}
-          >
-            <div className="result-rank">{idx + 1}</div>
+      <ol className="results-list">
+        {visible.map((song, idx) => {
+          const color = GENRE_COLORS[song.genre] || '#8B8B95'
+          const isActive = highlightedId === song.id
+          const scorePct = song.score != null ? Math.round(song.score * 100) : null
+          return (
+            <li
+              key={song.id}
+              className={`result-card${isActive ? ' result-card--active' : ''}`}
+              onMouseEnter={() => onSongHover(song.id)}
+              onMouseLeave={() => onSongHover(null)}
+              onClick={() => onSongClick(song.id)}
+              style={{ '--genre-color': color }}
+            >
+              <span className="result-stripe" aria-hidden="true" />
 
-            <div className="result-body">
-              <div className="result-header">
-                <span className="result-title">{song.title}</span>
-                {song.genre && (
-                  <span
-                    className="result-genre-tag"
-                    style={{ background: GENRE_COLORS[song.genre] || '#888' }}
-                  >
-                    {song.genre}
-                  </span>
+              <span className="result-rank">
+                <span className="result-rank-num">{idx + 1}</span>
+              </span>
+
+              <div className="result-body">
+                <div className="result-header">
+                  <span className="result-title">{song.title}</span>
+                  {song.genre && (
+                    <span
+                      className="result-genre-tag"
+                      style={{ background: color }}
+                    >
+                      {song.genre}
+                    </span>
+                  )}
+                </div>
+                <div className="result-artist">{song.artist}</div>
+                {(song.album || song.year) && (
+                  <div className="result-meta">
+                    {song.album}
+                    {song.album && song.year ? ' · ' : ''}
+                    {song.year || ''}
+                  </div>
+                )}
+                {song.lyrics_snippet && (
+                  <div className="result-lyrics">«{song.lyrics_snippet}»</div>
                 )}
               </div>
-              <div className="result-artist">{song.artist}</div>
-              <div className="result-meta">
-                {song.album && song.album}{song.album && song.year ? ' · ' : ''}{song.year || ''}
-              </div>
-              <div className="result-lyrics">{song.lyrics_snippet}</div>
-            </div>
 
-            {query && (
-              <div className="result-score-wrap">
-                <div className="result-score-bar">
-                  <div
-                    className="result-score-fill"
-                    style={{ height: `${song.score * 100}%` }}
-                  />
+              {query && scorePct != null && (
+                <div className="result-score-wrap" aria-label={`Similitud ${scorePct}%`}>
+                  <div className="result-score-ring" style={{ '--pct': scorePct }}>
+                    <span className="result-score-label">{scorePct}</span>
+                  </div>
                 </div>
-                <span className="result-score-label">{(song.score * 100).toFixed(0)}%</span>
-              </div>
-            )}
-          </div>
-        ))}
+              )}
+            </li>
+          )
+        })}
 
         {hasMore && (
           <button className="show-more-btn" onClick={handleShowMore}>
-            Veure més ({songs.length - visibleCount} restants)
+            Veure'n més
+            <span className="show-more-count">+{Math.min(12, songs.length - visibleCount)}</span>
           </button>
         )}
-      </div>
+      </ol>
 
-      {!hasMore && songs.length > 10 && (
-        <p className="results-footnote">Mostrant totes les {songs.length} cançons</p>
+      {!hasMore && songs.length > 12 && (
+        <p className="results-footnote">Mostrant les {songs.length} cançons</p>
       )}
     </div>
   )

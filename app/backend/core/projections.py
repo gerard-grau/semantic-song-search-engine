@@ -71,18 +71,22 @@ def compute_tsne_2d(songs: list[dict]) -> list[dict]:
 
 
 def _load_precomputed_2d() -> list[dict]:
-    """Load 2D positions from the parquet and attach song metadata."""
+    """
+    Load 2D positions from the parquet, but only for songs that survived
+    ``select_top_songs`` (see data_loader.load_visible_songs). Keeps the
+    point cloud and the song list perfectly in sync.
+    """
     import pyarrow.parquet as pq
 
     df = pq.read_table(_PRECOMP_2D, columns=["id_lyrics", "x", "y"]).to_pandas()
-    id_to_song = {s["id"]: s for s in load_visible_songs()}
+    id_to_song = {s["id"]: s for s in load_visible_songs()}  # already capped
 
     points: list[dict] = []
     for _, row in df.iterrows():
         sid = int(row["id_lyrics"])
         song = id_to_song.get(sid)
         if song is None:
-            continue
+            continue  # filtered out by select_top_songs
         points.append({
             "id":     sid,
             "x":      round(float(row["x"]), 4),

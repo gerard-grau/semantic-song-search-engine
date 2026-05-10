@@ -2,25 +2,13 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import ThemeToggle from './ThemeToggle'
 import SongDetail from './SongDetail'
 import { cercadorSearch } from '../api/client'
-
-const GENRE_COLORS = {
-  pop: '#FF6B6B',
-  rock: '#00BFA5',
-  folk: '#4FC3F7',
-  electronica: '#AB47BC',
-  'hip-hop': '#FFB74D',
-  rumba: '#FF8A65',
-}
+import { GENRE_COLORS } from './visualizations/genreColors'
 
 /**
  * Highlight all occurrences of any term in `terms` within `text`.
- * Used to highlight both the original query AND the corrected form,
- * so "buos" → finds "Buhos" and highlights it because the corrected
- * form "buhos" is also in the terms list.
  */
 function highlightText(text, terms) {
   if (!terms || terms.length === 0) return text
-  // Filter out very short terms to avoid noise
   const validTerms = terms.filter(t => t && t.length >= 2)
   if (validTerms.length === 0) return text
   const escaped = validTerms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -42,6 +30,24 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  // Cmd/Ctrl + K shortcut
+  useEffect(() => {
+    function onKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        inputRef.current?.focus()
+        inputRef.current?.select()
+      } else if (e.key === 'Escape' && document.activeElement === inputRef.current) {
+        if (query) {
+          setQuery('')
+          setResults(null)
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [query])
 
   const doSearch = useCallback(async (q) => {
     if (!q.trim()) {
@@ -87,65 +93,87 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
   const hasRight = cancons.length > 0 || noticies.length > 0
   const useTwoCol = hasLeft && hasRight
 
-  // Build highlight terms: original query + corrected form
   const highlightTerms = [query.trim()]
   if (results?.correction?.corrected) {
     highlightTerms.push(results.correction.corrected)
-    // Also add individual words of corrected form
     results.correction.corrected.split(/\s+/).forEach(w => {
       if (w.length >= 3) highlightTerms.push(w)
     })
   }
-  // Add individual words of query
   query.trim().split(/\s+/).forEach(w => {
     if (w.length >= 3) highlightTerms.push(w)
   })
 
   return (
     <div className="cercador-page">
-      <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-
-      <div className="cercador-nav">
+      <header className="cercador-nav">
         <button className="cercador-nav-btn" onClick={onBack}>
-          ← Tornar
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          Inici
         </button>
-        <button className="cercador-nav-btn cercador-nav-btn--accent" onClick={onDescobreix}>
-          Descobreix Viasona
-        </button>
-      </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button className="cercador-nav-btn cercador-nav-btn--accent" onClick={onDescobreix}>
+            Descobridor
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12h14M13 5l7 7-7 7" />
+            </svg>
+          </button>
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} inline />
+        </div>
+      </header>
 
-      <div className="cercador-container">
-        <h1 className="cercador-title">Cerca Viasona</h1>
+      <main className="cercador-container">
+        <span className="cercador-eyebrow">Cercador</span>
+        <h1 className="cercador-title">
+          Què vols <em>escoltar</em> avui?
+        </h1>
+        <p className="cercador-lede">
+          Cerca per nom de grup, títol de cançó, una frase d'una lletra o una notícia.
+        </p>
 
         <div className="cercador-search-wrap">
           <div className="cercador-input-row">
-            <span className="cercador-icon">&#128269;</span>
+            <span className="cercador-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.5-3.5" />
+              </svg>
+            </span>
             <input
               ref={inputRef}
               type="text"
               className="cercador-input"
-              placeholder="Cerca grups, lletres, noticies..."
+              placeholder="Cerca grups, lletres, notícies…"
               value={query}
               onChange={handleInput}
               autoComplete="off"
               spellCheck="false"
             />
             {query && (
-              <button className="cercador-clear" onClick={handleClear}>
+              <button className="cercador-clear" onClick={handleClear} aria-label="Esborrar cerca">
                 ×
               </button>
             )}
           </div>
 
+          {!showDropdown && (
+            <div className="cercador-kbd-hint">
+              <span><span className="cercador-kbd">⌘</span><span className="cercador-kbd">K</span> per enfocar</span>
+              <span><span className="cercador-kbd">esc</span> per netejar</span>
+            </div>
+          )}
+
           {showDropdown && (
             <div className="cercador-dropdown">
               {isSearching && !results && (
-                <div className="cercador-loading">Cercant...</div>
+                <div className="cercador-loading">Cercant…</div>
               )}
 
               {results && results.correction && (
                 <div className="cercador-correction">
-                  Volies dir:{' '}
+                  Volies dir{' '}
                   <button
                     className="cercador-correction-btn"
                     onClick={() => handleUseCorrection(results.correction.corrected)}
@@ -173,10 +201,9 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
 
               {hasResults ? (
                 <div className={`cercador-results ${useTwoCol ? 'cercador-results--two-col' : ''}`}>
-                  {/* LEFT COLUMN: GRUPS */}
                   {grups.length > 0 && (
                     <div className="cercador-section cercador-section--grups">
-                      <h3 className="cercador-section-title">GRUPS</h3>
+                      <h3 className="cercador-section-title">Grups</h3>
                       {grups.map((g, i) => (
                         <a
                           key={i}
@@ -201,18 +228,16 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                         </a>
                       ))}
                       {grups.length >= 5 && (
-                        <div className="cercador-more">Veure'n mes resultats →</div>
+                        <div className="cercador-more">Veure'n més →</div>
                       )}
                     </div>
                   )}
 
-                  {/* RIGHT COLUMN: wrap cancons + noticies */}
                   {hasRight && (
                     <div className="cercador-right-col">
-                      {/* LLETRES */}
                       {cancons.length > 0 && (
                         <div className="cercador-section">
-                          <h3 className="cercador-section-title">LLETRES</h3>
+                          <h3 className="cercador-section-title">Lletres</h3>
                           {cancons.map((s) => (
                             <div
                               key={s.id}
@@ -246,21 +271,20 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                               </div>
                               {s.lyrics_snippet && (
                                 <div className="cercador-song-snippet">
-                                  ...{highlightText(s.lyrics_snippet, highlightTerms)}
+                                  «{highlightText(s.lyrics_snippet, highlightTerms)}»
                                 </div>
                               )}
                             </div>
                           ))}
                           {cancons.length >= 8 && (
-                            <div className="cercador-more">Veure'n mes resultats →</div>
+                            <div className="cercador-more">Veure'n més →</div>
                           )}
                         </div>
                       )}
 
-                      {/* NOTICIES */}
                       {noticies.length > 0 && (
                         <div className="cercador-section">
-                          <h3 className="cercador-section-title">NOTICIES</h3>
+                          <h3 className="cercador-section-title">Notícies</h3>
                           {noticies.map((n) => (
                             <a
                               key={n.id}
@@ -287,7 +311,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                             </a>
                           ))}
                           {noticies.length >= 5 && (
-                            <div className="cercador-more">Veure'n mes resultats →</div>
+                            <div className="cercador-more">Veure'n més →</div>
                           )}
                         </div>
                       )}
@@ -297,14 +321,14 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
               ) : (
                 results && !isSearching && (
                   <div className="cercador-empty">
-                    No s'han trobat resultats per «{query}»
+                    Cap resultat per <strong>«{query}»</strong>
                   </div>
                 )
               )}
             </div>
           )}
         </div>
-      </div>
+      </main>
 
       <SongDetail songId={selectedSongId} onClose={() => setSelectedSongId(null)} />
     </div>
