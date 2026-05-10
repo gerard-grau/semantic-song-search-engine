@@ -26,15 +26,23 @@ pip install -r requirements.txt
 ### 3. Arrencar el backend (Terminal 1)
 
 ```bash
-uvicorn app.backend.api.main:app --reload --host 127.0.0.1 --port 8000
-
+# Arrencada normal — llegeix els parquets pre-calculats (ràpid)
 python -m uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000
 
-python -m app.backend.core.data_pipeline --method pca    
+# Forçar el recàlcul de la projecció 2D abans d'engegar l'API
+RECOMPUTE_2D=1 python -m uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000
 
-  .venv/bin/python -m app.backend.core.data_pipeline                  # UMAP, totes             
-  .venv/bin/python -m app.backend.core.data_pipeline --limit 5000     # UMAP, primeres 5000     
-  .venv/bin/python -m app.backend.core.data_pipeline --method tsne
+# Forçar també el recàlcul del snapshot de metadades (songs_meta.parquet)
+RECOMPUTE_META=1 python -m uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000
+```
+
+Generació manual dels parquets pre-calculats (recomanat un cop, abans del primer ús):
+
+```bash
+.venv/bin/python -m app.backend.core.data_pipeline                # 2D (UMAP) + metadades
+.venv/bin/python -m app.backend.core.data_pipeline --only-meta    # només snapshot de metadades
+.venv/bin/python -m app.backend.core.data_pipeline --skip-meta    # només la projecció 2D
+.venv/bin/python -m app.backend.core.data_pipeline --method tsne  # 2D amb t-SNE
 ```
 
 El backend estarà a `http://127.0.0.1:8000`. Swagger UI a `http://127.0.0.1:8000/docs`.

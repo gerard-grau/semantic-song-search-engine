@@ -6,49 +6,35 @@ import ThemeToggle from './components/ThemeToggle'
 import FilterBar from './components/FilterBar'
 import TopResults from './components/TopResults'
 import SongDetail from './components/SongDetail'
-import VizSelector from './components/VizSelector'
 import Scatter2D from './components/visualizations/Scatter2D'
-import Scatter3D from './components/visualizations/Scatter3D'
-import Navigation2D from './components/visualizations/Navigation2D'
 import { fetchAllSongs, filterSongs, fetchNeighbors } from './api/client'
 import './App.css'
 
 export default function App() {
   const { theme, toggleTheme } = useTheme()
 
-  // Page state
   const [page, setPage] = useState('welcome')
 
-  // Data state — allSongs & baseProj are the permanent full dataset
   const [allSongs, setAllSongs] = useState([])
   const [baseProj2d, setBaseProj2d] = useState([])
-  const [baseProj3d, setBaseProj3d] = useState([])
 
-  // Active highlights — which songs are "active" (filtered or neighbors)
-  // null means all songs are active (no filter applied)
+  // null = no filter applied (everything is active).
   const [activeIds, setActiveIds] = useState(null)
-  // Score map: songId → score (0-1) for sizing active songs
   const [scoreMap, setScoreMap] = useState({})
 
-  // Chip-based filters
   const [chips, setChips] = useState([])
 
-  // Similarity mode: clicked song
   const [similarToId, setSimilarToId] = useState(null)
   const [similarToTitle, setSimilarToTitle] = useState(null)
 
-  // UI state
-  const [vizMode, setVizMode] = useState('2D')
   const [selectedSongId, setSelectedSongId] = useState(null)
   const [highlightedId, setHighlightedId] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
   const [message, setMessage] = useState(null)
 
-  // Track current alive IDs for progressive filtering
   const aliveIdsRef = useRef(null)
 
-  // Songs to show in left panel (active ones, sorted by score)
   const displaySongs = activeIds
     ? allSongs
         .filter(s => activeIds.has(s.id))
@@ -56,7 +42,6 @@ export default function App() {
         .sort((a, b) => b.score - a.score)
     : allSongs
 
-  // ── Load all songs (initial + reset) ──
   const loadAll = useCallback(async () => {
     setIsLoading(true)
     setError(null)
@@ -64,7 +49,6 @@ export default function App() {
       const data = await fetchAllSongs()
       setAllSongs(data.songs)
       setBaseProj2d(data.projections_2d)
-      setBaseProj3d(data.projections_3d)
       setActiveIds(null)
       setScoreMap({})
       setChips([])
@@ -80,23 +64,19 @@ export default function App() {
     }
   }, [])
 
-  // ── Enter main app from welcome ──
   async function handleEnter() {
     await loadAll()
     setPage('main')
   }
 
-  // ── Add a chip filter ──
   async function handleAddChip(q) {
     if (!q.trim()) return
     setIsLoading(true)
     setError(null)
-    // Exit similarity mode when filtering
     setSimilarToId(null)
     setSimilarToTitle(null)
     try {
-      const currentAlive = aliveIdsRef.current
-      const data = await filterSongs(q, currentAlive)
+      const data = await filterSongs(q, aliveIdsRef.current)
       const newAliveIds = data.songs.map(s => s.id)
       aliveIdsRef.current = newAliveIds
       setActiveIds(new Set(newAliveIds))
@@ -113,13 +93,11 @@ export default function App() {
     }
   }
 
-  // ── Remove a chip (re-apply remaining chips from scratch) ──
   async function handleRemoveChip(index) {
     const newChips = chips.filter((_, i) => i !== index)
     setChips(newChips)
 
     if (newChips.length === 0) {
-      // No filters left — show everything
       setActiveIds(null)
       setScoreMap({})
       aliveIdsRef.current = null
@@ -127,7 +105,6 @@ export default function App() {
       return
     }
 
-    // Re-apply all remaining chips from scratch
     setIsLoading(true)
     setError(null)
     try {
@@ -151,7 +128,6 @@ export default function App() {
     }
   }
 
-  // ── Reset everything ──
   function handleReset() {
     setActiveIds(null)
     setScoreMap({})
@@ -162,7 +138,6 @@ export default function App() {
     aliveIdsRef.current = null
   }
 
-  // ── Click a song in scatter → show similar songs (respecting chip filters) ──
   async function handleSongExplore(songId) {
     setIsLoading(true)
     setError(null)
@@ -177,21 +152,17 @@ export default function App() {
       let neighborIds = new Set(data.songs.map(s => s.id))
       neighborIds.add(songId)
 
-      // If chip filters are active, intersect neighbors with alive IDs
       const chipAlive = aliveIdsRef.current
       if (chipAlive) {
         const chipSet = new Set(chipAlive)
         neighborIds = new Set([...neighborIds].filter(id => chipSet.has(id)))
-        neighborIds.add(songId) // always keep focal
+        neighborIds.add(songId)
       }
 
       setActiveIds(neighborIds)
 
-      // Build score map from neighbor distances
       const newScoreMap = {}
-      data.songs.forEach(s => {
-        newScoreMap[s.id] = s.score ?? 0
-      })
+      data.songs.forEach(s => { newScoreMap[s.id] = s.score ?? 0 })
       newScoreMap[songId] = 1
       setScoreMap(newScoreMap)
     } catch (err) {
@@ -202,11 +173,9 @@ export default function App() {
     }
   }
 
-  // ── Exit similarity mode ──
   function handleExitSimilar() {
     setSimilarToId(null)
     setSimilarToTitle(null)
-    // If we had chip filters, restore them
     if (chips.length > 0 && aliveIdsRef.current) {
       setActiveIds(new Set(aliveIdsRef.current))
     } else {
@@ -215,12 +184,10 @@ export default function App() {
     }
   }
 
-  // ── Open song detail modal ──
   function handleOpenDetail(songId) {
     setSelectedSongId(songId)
   }
 
-  // ── Render ──
   if (page === 'welcome') {
     return (
       <WelcomePage
@@ -248,7 +215,6 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* Header */}
       <header className="app-header">
         <div className="header-left">
           <button className="header-home-btn" onClick={() => setPage('welcome')}>← Inici</button>
@@ -259,7 +225,6 @@ export default function App() {
 
       {error && <div className="error-banner">{error}</div>}
 
-      {/* Main */}
       <main className="app-main">
         <section className="panel-left">
           <TopResults
@@ -273,7 +238,6 @@ export default function App() {
         </section>
 
         <section className="panel-right">
-          {/* Filter bar with chips */}
           <div className="viz-bar">
             <FilterBar
               chips={chips}
@@ -285,7 +249,6 @@ export default function App() {
           </div>
 
           <div className="viz-bar viz-bar--controls">
-            <VizSelector mode={vizMode} onChange={setVizMode} />
             <span className="viz-count">
               {similarToId
                 ? `${activeCount} cançons similars`
@@ -295,7 +258,6 @@ export default function App() {
             </span>
           </div>
 
-          {/* Similarity mode bar */}
           {similarToId && (
             <div className="viz-bar viz-bar--explore">
               <button className="explore-back-btn" onClick={handleExitSimilar}>← Enrere</button>
@@ -307,45 +269,20 @@ export default function App() {
           )}
 
           <div className="viz-area">
-            {vizMode === '2D' && (
-              <Scatter2D
-                points={baseProj2d}
-                activeIds={activeIds}
-                scoreMap={scoreMap}
-                focalId={similarToId}
-                highlightedId={highlightedId}
-                onPointHover={setHighlightedId}
-                onPointClick={handleSongExplore}
-                onPointDoubleClick={handleOpenDetail}
-              />
-            )}
-            {vizMode === '3D' && (
-              <Scatter3D
-                points={baseProj3d}
-                highlightedId={highlightedId}
-                onPointHover={setHighlightedId}
-                onPointClick={handleOpenDetail}
-                topIds={activeIds ? [...activeIds] : []}
-                faded={false}
-                scores={displaySongs}
-              />
-            )}
-            {vizMode === 'nav' && (
-              <Navigation2D
-                points={baseProj2d}
-                highlightedId={highlightedId}
-                onPointHover={setHighlightedId}
-                onPointClick={handleOpenDetail}
-                topIds={activeIds ? [...activeIds] : []}
-                faded={false}
-                scores={displaySongs}
-              />
-            )}
+            <Scatter2D
+              points={baseProj2d}
+              activeIds={activeIds}
+              scoreMap={scoreMap}
+              focalId={similarToId}
+              highlightedId={highlightedId}
+              onPointHover={setHighlightedId}
+              onPointClick={handleSongExplore}
+              onPointDoubleClick={handleOpenDetail}
+            />
           </div>
         </section>
       </main>
 
-      {/* Song detail popup */}
       <SongDetail songId={selectedSongId} onClose={() => setSelectedSongId(null)} />
     </div>
   )

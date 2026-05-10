@@ -40,20 +40,9 @@ class Point2D(BaseModel):
     role: str = "neighbor"  # "focal" | "neighbor" | "previous" | "bridge"
 
 
-class Point3D(BaseModel):
-    id: int
-    x: float
-    y: float
-    z: float
-    title: str
-    artist: str
-    genre: str
-
-
 class AllSongsResponse(BaseModel):
     songs: list[SongResult]
     projections_2d: list[Point2D]
-    projections_3d: list[Point3D]
     total: int
 
 
@@ -65,7 +54,6 @@ class FilterRequest(BaseModel):
 class FilterResponse(BaseModel):
     songs: list[SongResult]
     projections_2d: list[Point2D]
-    projections_3d: list[Point3D]
     total_remaining: int
     message: str | None = None
 
