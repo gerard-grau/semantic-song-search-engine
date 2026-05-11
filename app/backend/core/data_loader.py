@@ -46,7 +46,21 @@ _all_metadata_cache:     list[dict] | None = None
 _all_id_index:           dict[int, dict] | None = None
 _visible_metadata_cache: list[dict] | None = None
 _visible_id_index:       dict[int, dict] | None = None
-_embedding_cache:        dict[int, list[float]] = {}
+
+# ``_embedding_cache[id_lyrics]`` is the ``(F, D)`` float32 matrix of the song's
+# F per-field e5 embeddings, in EMBEDDING_FIELD_COLUMNS order. F=5, D=1024.
+_embedding_cache:        dict[int, np.ndarray] = {}
+
+# Field order used by the late-fusion scorer.  Add/remove columns here to
+# change the multi-field set; the math (max over fields) doesn't care about
+# the order, only that all songs share it.
+EMBEDDING_FIELD_COLUMNS: tuple[str, ...] = (
+    "embedded_lyrics",
+    "embedded_qualitative_description",
+    "embedded_title",
+    "embedded_album",
+    "embedded_artist",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +79,30 @@ def _embedding_to_list(val) -> list[float]:
         return [float(x) for x in val]
     except (TypeError, ValueError):
         return []
+
+
+def _embedding_to_array(val, dim: int | None = None) -> np.ndarray:
+    """Parse one parquet embedding cell into a 1-D float32 vector.
+
+    Returns a zero vector of length ``dim`` if parsing fails / value missing.
+    """
+    if val is None:
+        return np.zeros(dim or 0, dtype=np.float32)
+    if isinstance(val, str):
+        s = val.strip()
+        if s.startswith("[") and s.endswith("]"):
+            arr = np.fromstring(s.strip("[]"), sep=",", dtype=np.float32)
+            if dim is not None and arr.shape[0] != dim:
+                return np.zeros(dim, dtype=np.float32)
+            return arr
+        return np.zeros(dim or 0, dtype=np.float32)
+    try:
+        arr = np.asarray(val, dtype=np.float32)
+        if dim is not None and arr.shape[0] != dim:
+            return np.zeros(dim, dtype=np.float32)
+        return arr
+    except (TypeError, ValueError):
+        return np.zeros(dim or 0, dtype=np.float32)
 
 
 def _extract_year(val) -> int:
@@ -261,8 +299,15 @@ def _read_meta_snapshot() -> list[dict] | None:
 # Embedding loader (lazy, filtered, streaming)
 # ---------------------------------------------------------------------------
 
-def load_embeddings_for_ids(ids: Iterable[int]) -> dict[int, list[float]]:
-    """Read ``embedded_songs.parquet`` row-group by row-group; cache per id."""
+def load_embeddings_for_ids(ids: Iterable[int]) -> dict[int, np.ndarray]:
+    """Read all ``EMBEDDING_FIELD_COLUMNS`` for the requested ids from parquet.
+
+    Each value in the returned dict is an ``(F, D)`` float32 matrix where
+    rows are aligned with ``EMBEDDING_FIELD_COLUMNS``.  Missing or
+    malformed cells become zero rows so they contribute nothing under cosine.
+
+    Results are cached per id for the process lifetime.
+    """
     wanted = {int(i) for i in ids}
     if not wanted:
         return {}
@@ -271,30 +316,66 @@ def load_embeddings_for_ids(ids: Iterable[int]) -> dict[int, list[float]]:
         if not _PARQUET.exists():
             raise FileNotFoundError(f"Embeddings parquet not found at {_PARQUET}.")
         pf = pq.ParquetFile(_PARQUET)
-        for batch in pf.iter_batches(
-            columns=["id_lyrics", "embedded_lyrics"], batch_size=10_000,
-        ):
-            ids_arr  = batch.column("id_lyrics").to_pylist()
-            embs_arr = batch.column("embedded_lyrics").to_pylist()
-            for sid, emb in zip(ids_arr, embs_arr):
+        cols = ["id_lyrics", *EMBEDDING_FIELD_COLUMNS]
+        # First pass: peek at row 0 to discover D so zero-fills are sized right.
+        dim: int | None = None
+        for batch in pf.iter_batches(columns=cols, batch_size=10_000):
+            ids_arr = batch.column("id_lyrics").to_pylist()
+            field_arrays = [batch.column(c).to_pylist() for c in EMBEDDING_FIELD_COLUMNS]
+            if dim is None:
+                # Sample any non-empty cell to lock in D.
+                for col in field_arrays:
+                    for cell in col:
+                        arr = _embedding_to_array(cell)
+                        if arr.size > 0:
+                            dim = int(arr.size)
+                            break
+                    if dim is not None:
+                        break
+            for i, sid in enumerate(ids_arr):
                 sid = int(sid)
-                if sid in missing and sid not in _embedding_cache:
-                    _embedding_cache[sid] = _embedding_to_list(emb)
+                if sid not in missing or sid in _embedding_cache:
+                    continue
+                rows = [
+                    _embedding_to_array(field_arrays[f][i], dim=dim)
+                    for f in range(len(EMBEDDING_FIELD_COLUMNS))
+                ]
+                _embedding_cache[sid] = np.stack(rows, axis=0).astype(np.float32)
             if not (missing - _embedding_cache.keys()):
                 break
-    return {sid: _embedding_cache.get(sid, []) for sid in wanted}
+    return {sid: _embedding_cache.get(sid) for sid in wanted}
 
 
 def attach_embeddings(songs: list[dict]) -> list[dict]:
-    """Fill the ``embedding`` field of each song in-place. Idempotent."""
+    """Attach per-field embeddings to each song in-place. Idempotent.
+
+    Sets two fields:
+
+    * ``embedding_fields`` — ``(F, D)`` float32 ndarray, F rows aligned with
+      ``EMBEDDING_FIELD_COLUMNS``.  Consumed by ``filter_embeddings`` for
+      multi-field late-fusion query scoring.
+    * ``embedding``        — the lyrics row of ``embedding_fields`` as a
+      Python list, preserved for callers that still expect the single-vector
+      shape (song-song similarity, neighborhood MDS).
+    """
     if not songs:
         return songs
-    needed = [s["id"] for s in songs if not s.get("embedding")]
+    needed = [s["id"] for s in songs if s.get("embedding_fields") is None]
     if needed:
         emb_map = load_embeddings_for_ids(needed)
         for s in songs:
-            if not s.get("embedding"):
-                s["embedding"] = emb_map.get(s["id"], [])
+            if s.get("embedding_fields") is not None:
+                continue
+            matrix = emb_map.get(s["id"])
+            if matrix is None or matrix.size == 0:
+                s["embedding_fields"] = None
+                s["embedding"] = []
+            else:
+                s["embedding_fields"] = matrix
+                # Lyrics is the first field — keep ``embedding`` as a list so
+                # downstream song-song code doesn't need to know about the
+                # multi-field structure.
+                s["embedding"] = matrix[0].tolist()
     return songs
 
 

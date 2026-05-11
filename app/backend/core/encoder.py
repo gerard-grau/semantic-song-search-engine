@@ -15,8 +15,10 @@ import torch
 logger = logging.getLogger(__name__)
 
 # ── Change these when switching models ────────────────────────────────────────
-MODEL_NAME     = "intfloat/multilingual-e5-small"
-MODEL_DIM      = 384        # output dimension; must match MODEL_NAME
+# embedded_songs.parquet was generated with multilingual-e5-large (1024-dim);
+# the query encoder must match or filter_embeddings falls back to word overlap.
+MODEL_NAME     = "intfloat/multilingual-e5-large"
+MODEL_DIM      = 1024       # output dimension; must match MODEL_NAME
 QUERY_PREFIX   = "query: "  # prepended to search queries at inference time
 PASSAGE_PREFIX = "passage: "  # prepended to song texts at embedding time
 

@@ -1,10 +1,12 @@
 export const GENRE_COLORS = {
-  pop: '#FF6B6B',
-  rock: '#00BFA5',
-  folk: '#4FC3F7',
-  electronica: '#AB47BC',
-  'hip-hop': '#FFB74D',
-  rumba: '#FF8A65',
+  pop:           '#FF6B6B',
+  rock:          '#00BFA5',
+  folk:          '#4FC3F7',
+  electronica:   '#AB47BC',
+  'hip-hop':     '#FFB74D',
+  rumba:         '#FF8A65',
+  'cançó-autor': '#81C784',
+  punk:          '#E57373',
 }
 
 export const DEFAULT_COLOR = '#888'
