@@ -77,9 +77,9 @@ export default function Scatter2D({
     }
 
     const hasFilter = activeIds != null
-    // Screen-space radius: dots stay the same visual size at any zoom.
-    // Only the world positions move when zooming (handled by pointToScreen).
-    const NODE_R = 5
+    // Dots scale with zoom on a sqrt curve: visibly responsive but tapers off
+    // so they don't dominate the canvas at high zoom levels.
+    const NODE_R = 1.25 * Math.sqrt(viewRef.current.zoom)
 
     // Read theme-aware label colors from CSS tokens so canvas matches the page.
     const cs = getComputedStyle(document.documentElement)
@@ -136,23 +136,23 @@ export default function Scatter2D({
       if (isHovered) {
         ctx.globalAlpha = 1
 
-        // Glow halo (screen-space constant)
+        // Glow halo
         ctx.beginPath()
-        ctx.arc(px, py, r + 10, 0, Math.PI * 2)
+        ctx.arc(px, py, r * 3, 0, Math.PI * 2)
         ctx.fillStyle = color
         ctx.globalAlpha = 0.14
         ctx.fill()
 
         // Outer soft ring
         ctx.beginPath()
-        ctx.arc(px, py, r + 5, 0, Math.PI * 2)
+        ctx.arc(px, py, r * 2, 0, Math.PI * 2)
         ctx.fillStyle = color
         ctx.globalAlpha = 0.28
         ctx.fill()
 
         // Main circle (slightly larger on hover)
         ctx.beginPath()
-        ctx.arc(px, py, r + 1, 0, Math.PI * 2)
+        ctx.arc(px, py, r * 1.2, 0, Math.PI * 2)
         ctx.fillStyle = color
         ctx.globalAlpha = 1
         ctx.fill()
@@ -180,7 +180,7 @@ export default function Scatter2D({
       if (isActive) {
         // Soft outer ring for active nodes
         ctx.beginPath()
-        ctx.arc(px, py, r + 3, 0, Math.PI * 2)
+        ctx.arc(px, py, r * 1.6, 0, Math.PI * 2)
         ctx.fillStyle = color
         ctx.globalAlpha = 0.08
         ctx.fill()
@@ -252,9 +252,10 @@ export default function Scatter2D({
   }
 
   function findClosestPoint(mx, my) {
-    // Screen-space hit radius — independent of zoom, matches the new constant dot size.
+    // Hit radius tracks the current dot size (zoom-dependent) with a floor so
+    // tiny dots remain clickable when zoomed out.
     let closest = null
-    let closestDist = 14
+    let closestDist = Math.max(10, 1.25 * Math.sqrt(viewRef.current.zoom) + 6)
     for (const p of points) {
       const sp = getScreenPos(p)
       const dist = Math.hypot(mx - sp.x, my - sp.y)

@@ -50,18 +50,52 @@ _GRUPS    = _DATA_DIR / "grups.csv"
 
 # Catalan stopwords that carry no retrieval signal — they would otherwise
 # blow up posting-list scans (every item contains "de", "la", …) without
-# adding anything to the ranking. Parser2 already down-weights common
-# inputs, but the IDF in scoring would still leak score through them.
+# adding anything to the ranking. Includes accented variants because
+# normalize() keeps accents, so "més" and "mes" hash to different tokens.
 _STOPWORDS = {
+    # articles & per+article contractions
     "el", "la", "els", "les", "un", "una", "uns", "unes",
-    "de", "del", "dels", "des", "al", "als", "en", "amb", "per",
-    "que", "qui", "i", "o", "no", "si",
+    "de", "del", "dels", "des", "al", "als",
+    "pel", "pels",
+    # prepositions
+    "en", "amb", "per", "fins", "sense", "sobre", "sota",
+    # conjunctions
+    "i", "o", "ni",
+    # interrogatives / relatives
+    "que", "què", "qui", "quan", "com", "on",
+    # negation / affirmation
+    "no", "si", "sí",
+    # clitic + tonic pronouns
     "es", "se", "ens", "us", "li", "et", "em",
-    "ha", "han", "he", "fa",
-    "mes", "be", "mai", "aqui", "alla", "avui", "ara", "com",
-    "molt", "tot", "tots", "cada", "quan", "on",
-    "ho", "lo", "te", "del",
+    "ho", "lo", "te", "hi",
+    # auxiliaries (haver, fer present tense)
+    "ha", "han", "he", "has", "hem", "heu",
+    "fa", "fan",
+    # quantifiers & intensifiers
+    "molt", "molts", "molta", "moltes",
+    "tot", "tots", "tota", "totes",
+    "tan", "tant", "tants", "tanta", "tantes",
+    "cada", "altre", "altra", "altres",
+    "gens", "res",
+    # adverbs (with accented variants)
+    "mes", "més", "be", "bé", "ben",
+    "mai", "ja", "ara", "avui",
+    "aqui", "aquí", "alla", "allà",
+    "doncs",
 }
+
+
+# wordfreq-based dampener reference (per-million scale used by
+# Parser2.load_lexicon). Each scored token is multiplied by
+# 1 / (1 + lex_freq / LEX_PENALTY_REF). Set so:
+#   * pel ("per+el", per-million freq ~300+) → multiplier ~0.25
+#   * terra (noun, per-million freq ~50)     → multiplier ~0.67
+#   * amor (noun, per-million freq ~20)      → multiplier ~0.83
+#   * OOV / proper nouns / song-specific     → multiplier 1.0
+# This makes "rarer words count more" hold across the language even when
+# corpus IDF doesn't tell them apart (both pel and terra appear in many
+# titles, but pel is grammatical filler and terra is a content noun).
+LEX_PENALTY_REF = 100
 
 
 # ---------------------------------------------------------------------------
@@ -249,16 +283,17 @@ class CercadorIndex:
             if artist:
                 self.songs_artist_phrase[artist].append(i)
 
-            # Tokens come from the normalized field. Use a per-field set so
-            # repeated tokens don't double-count weight.
+            # Short fields (title, artist) are indexed *including* stopwords
+            # so an all-stopwords query like "pel" can still surface "Pel
+            # Cami" via the fallback in search(). Stopwords are filtered at
+            # query time in _score, except when every input token is a
+            # stopword — there's no budget concern on short fields.
             for tok in set(tokenize(title)):
-                if tok not in _STOPWORDS:
-                    self.songs_idx[tok].append((i, self.W_SONG_TITLE))
+                self.songs_idx[tok].append((i, self.W_SONG_TITLE))
             for tok in set(tokenize(artist)):
-                if tok not in _STOPWORDS:
-                    self.songs_idx[tok].append((i, self.W_SONG_ARTIST))
-            # Snippet: index a few high-information tokens to support
-            # lyric-style queries without ballooning the index.
+                self.songs_idx[tok].append((i, self.W_SONG_ARTIST))
+            # Snippet keeps the stopword filter: 25-token budget per song
+            # would otherwise be eaten by "de"/"la" and starve real signal.
             snippet = normalize(s.get("lyrics_snippet", "")[:200])
             seen: set[str] = set()
             for tok in tokenize(snippet):
@@ -277,8 +312,7 @@ class CercadorIndex:
             if name:
                 self.grups_phrase[name].append(i)
             for tok in set(tokenize(name)):
-                if tok not in _STOPWORDS:
-                    self.grups_idx[tok].append((i, self.W_GRUP_NAME))
+                self.grups_idx[tok].append((i, self.W_GRUP_NAME))
 
     def _index_noticies(self) -> None:
         self._noticies_title_norm = [""] * len(self.noticies)
@@ -289,8 +323,7 @@ class CercadorIndex:
             if title:
                 self.noticies_phrase[title].append(i)
             for tok in set(tokenize(title)):
-                if tok not in _STOPWORDS:
-                    self.noticies_idx[tok].append((i, self.W_NOTI_TITLE))
+                self.noticies_idx[tok].append((i, self.W_NOTI_TITLE))
             seen: set[str] = set()
             for tok in tokenize(snippet):
                 if tok in _STOPWORDS or tok in seen:
@@ -318,9 +351,19 @@ class CercadorIndex:
         parsed = self.parser.parse(query, top_k=20, phrase_match=False)
         q_norm = normalize(query)
 
-        grup_scores    = self._score(parsed, self.grups_idx,    len(self.grups))
-        song_scores    = self._score(parsed, self.songs_idx,    len(self.songs))
-        noticia_scores = self._score(parsed, self.noticies_idx, len(self.noticies))
+        # When every input token is a stopword ("pel", "el meu", …) the
+        # standard filter blocks every candidate and we'd return nothing.
+        # Score with stopwords enabled in that case — the lex_penalty and
+        # BM25 IDF already crush low-signal tokens, so rankings stay sane
+        # (matches on rarer stopwords like "pel" outrank near-universal
+        # ones like "el", and titles with multiple stopword hits rise).
+        q_tokens = tokenize(q_norm)
+        keep_stopwords = bool(q_tokens) and all(t in _STOPWORDS for t in q_tokens)
+        fw = not keep_stopwords
+
+        grup_scores    = self._score(parsed, self.grups_idx,    len(self.grups),    filter_stopwords=fw)
+        song_scores    = self._score(parsed, self.songs_idx,    len(self.songs),    filter_stopwords=fw)
+        noticia_scores = self._score(parsed, self.noticies_idx, len(self.noticies), filter_stopwords=fw)
 
         # Exact-phrase boosts so "Sau" → the band Sau, not a song with "sau"
         # buried in lyrics. We boost each matching index, not all-or-nothing.
@@ -473,35 +516,48 @@ class CercadorIndex:
                 continue
             scores[idx] += distance_to_prob(d, max(ql, len(phrase))) * weight
 
-    @staticmethod
     def _score(
+        self,
         parsed: dict[str, float],
         idx: dict[str, list[tuple[int, float]]],
         n_items: int,
+        filter_stopwords: bool = True,
     ) -> dict[int, float]:
         """
-        Token scoring: per posting, add ``prob * idf * field_weight`` to the
-        item's score. We do *not* hard-cut high-df tokens — that previously
-        dropped useful signal (a query like "bog per tu" relies on "tu"'s
-        low-but-nonzero IDF to rank the song "Boig per Tu" above a single-
-        rare-token distractor like "Mr Bong"). IDF naturally squashes the
-        most common tokens; we just clamp it to a small floor so a near-
-        universal token still nudges multi-word matches above single-token
-        ones without dominating the ranking.
+        Token scoring: per posting, add ``prob * idf * lex_penalty *
+        field_weight`` to the item's score.
+
+        IDF uses BM25's classical form, ``log((N - df + 0.5) / (df + 0.5))``,
+        clamped to a 0.1 floor. Drops sharply once a term sits in more than
+        ~30% of docs (and would go negative past ~50% without the clamp),
+        so function words that flood the catalog stop dominating the score
+        — while a near-universal token still nudges multi-word matches
+        above single-token ones (we don't hard-cut: "bog per tu" relies on
+        "tu"'s small IDF to rank "Boig per Tu" above lone rare-token noise
+        like "Mr Bong").
+
+        Lex penalty knocks down candidates that wordfreq considers very
+        common Catalan, regardless of corpus df. Catches function words
+        like ``pel`` (per+el) even when they don't dominate the catalog
+        statistically, and lets a rare noun beat a common-noun match of
+        the same df — which corpus IDF alone can't do.
         """
         scores: dict[int, float] = defaultdict(float)
         if not n_items:
             return scores
-        log_n = math.log(1 + n_items)
+        lex = self.parser.lexicon
         for tok, prob in parsed.items():
-            if len(tok) < 2 or tok in _STOPWORDS:
+            if len(tok) < 2:
+                continue
+            if filter_stopwords and tok in _STOPWORDS:
                 continue
             postings = idx.get(tok)
             if not postings:
                 continue
             df = len(postings)
-            idf = max(0.1, log_n - math.log(df))
-            weight = prob * idf
+            idf = max(0.1, math.log((n_items - df + 0.5) / (df + 0.5)))
+            lex_penalty = 1.0 / (1.0 + lex.get(tok, 0) / LEX_PENALTY_REF)
+            weight = prob * idf * lex_penalty
             for item_idx, field_w in postings:
                 scores[item_idx] += weight * field_w
         return scores
