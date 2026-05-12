@@ -613,6 +613,7 @@
 
 /* Score as a circular ring (conic gradient) */
 .result-score-wrap {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -625,12 +626,21 @@
   width: 38px;
   height: 38px;
   border-radius: 50%;
+  border: none;
+  padding: 0;
   background:
-    conic-gradient(var(--genre-color) calc(var(--pct, 0) * 1%), var(--line) 0);
+    conic-gradient(var(--score-color, var(--brand)) calc(var(--pct, 0) * 1%), var(--line) 0);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.4s var(--ease);
+  transition: background 0.4s var(--ease), transform var(--t-fast) var(--ease);
+  cursor: default;
+}
+.result-score-wrap--clickable .result-score-ring {
+  cursor: pointer;
+}
+.result-score-wrap--clickable .result-score-ring:hover {
+  transform: scale(1.08);
 }
 .result-score-ring::before {
   content: '';
@@ -654,6 +664,105 @@
   font-weight: 600;
   color: var(--ink-mute);
   margin-left: 1px;
+}
+
+.result-score-breakdown {
+  /* JS sets `left`, `top`, and a vertical translate. The popover is
+     position: fixed so it escapes .result-card { overflow: hidden } and
+     .panel-left { overflow-y: auto } — otherwise it would be clipped
+     inside the card or behind the canvas. */
+  z-index: 1000;
+  min-width: 220px;
+  max-width: 280px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  padding: 10px 12px;
+}
+.result-score-breakdown-song {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.result-score-breakdown-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+.result-score-breakdown-close {
+  border: none;
+  background: transparent;
+  color: var(--ink-mute);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.result-score-breakdown-close:hover { color: var(--ink); }
+.result-score-breakdown-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.result-score-breakdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.78rem;
+}
+.result-score-breakdown-row--total {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--line);
+  font-weight: 700;
+}
+.result-score-breakdown-chip {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--brand-soft);
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.result-score-breakdown-chip--similar {
+  background: var(--accent-2-soft, var(--brand-soft));
+}
+.result-score-breakdown-chip--total {
+  background: transparent;
+  color: var(--ink-mute);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.68rem;
+}
+.result-score-breakdown-val {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--ink);
+  font-size: 0.78rem;
+  flex-shrink: 0;
 }
 
 .show-more-btn {
@@ -779,6 +888,99 @@
   box-shadow: var(--shadow-md);
 }
 
+/* Click popover anchored to a scatter point.
+   Positioned with inline left/top set by Scatter2D in canvas-pixel coords. */
+.viz-popover {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 14px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+  max-width: 280px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.18));
+  z-index: 12;
+  animation: popoverIn 140ms var(--ease, ease-out);
+}
+@keyframes popoverIn {
+  from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)) scale(0.96); }
+  to   { opacity: 1; transform: translate(-50%, calc(-100% - 14px)) scale(1); }
+}
+.viz-popover::after {
+  content: '';
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.viz-popover-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+.viz-popover-title {
+  font-weight: 600;
+  font-size: var(--t-sm);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.viz-popover-artist {
+  font-size: var(--t-xs);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.viz-popover-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.viz-popover-btn {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease),
+              color var(--t-fast) var(--ease),
+              border-color var(--t-fast) var(--ease);
+}
+.viz-popover-btn:hover {
+  background: var(--hover);
+}
+.viz-popover-btn--primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
+}
+.viz-popover-btn--primary:hover {
+  background: var(--brand-hover);
+}
+.viz-popover-btn--close {
+  flex: 0 0 28px;
+  padding: 6px 0;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--ink-soft);
+}
+
 /* legend — floating glass card on top of viz */
 .viz-legend {
   position: absolute;
@@ -887,6 +1089,19 @@
   transition: background var(--t-fast) var(--ease);
 }
 .filter-chip-remove:hover { background: rgba(255,255,255,0.36); }
+
+/* Similar-to chips wear the brand accent so the user can tell at a glance
+   which constraints came from a point click vs. a text query. */
+.filter-chip--similar {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+.filter-chip-icon {
+  font-weight: 700;
+  font-size: 0.95em;
+  margin-right: 1px;
+  opacity: 0.85;
+}
 
 .filter-input {
   flex: 1;

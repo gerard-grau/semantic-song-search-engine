@@ -50,36 +50,66 @@ def _maybe_recompute() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Pre-warm the embedding model and the cercador index, both off-thread so
-    the API can start serving cheap endpoints (`/`, `/api/songs`) immediately.
-    The first ``/api/cercador`` and ``/api/filter`` calls await whichever
-    background task they need.
+    Pre-warm everything the /filter hot path touches *before* the server
+    starts accepting traffic so the first user query only pays for one
+    forward pass + one matmul.
+
+    Steps (in order):
+
+    1. Read the cheap precomputed parquets (visible songs + 2D points) so
+       the first ``/api/songs`` is instant.
+    2. Build the dense visible index — the ``(N, F, D)`` cube the fast
+       filter slices into. ~10-15 s of parquet + numpy work that we'd
+       otherwise pay on the first query.
+    3. Load the embedding model AND run a dummy ``encode_query`` to JIT
+       the first forward pass. Without this, the very first real query
+       takes 20-60 s on CPU (model load + transformers warm-up).
+    4. Schedule the cercador index in the background — it isn't on the
+       /filter path, so we don't block startup on it.
     """
     import asyncio
 
     from app.backend.core.cercador_index import prewarm as prewarm_cercador
-    from app.backend.core.data_loader import load_visible_songs
-    from app.backend.core.encoder import load_encoder
+    from app.backend.core.data_loader import (
+        get_visible_index,
+        load_visible_songs,
+    )
+    from app.backend.core.encoder import encode_query, load_encoder
     from app.backend.core.projections import get_all_projections_2d
 
     _maybe_recompute()
 
     loop = asyncio.get_event_loop()
 
-    # Lightweight: read the small precomputed parquets so the first
-    # /api/songs hit is instant. Both are cached after this.
+    # 1. Small parquets — used by both /api/songs and the visible index.
     try:
         await loop.run_in_executor(None, load_visible_songs)
         await loop.run_in_executor(None, get_all_projections_2d)
     except Exception as exc:
         logger.warning("Could not prewarm visible-songs cache (%s).", exc)
 
-    # Heavy work — schedule on the executor and let it run in the background.
-    # run_in_executor returns a Future that's already scheduled; no create_task needed.
-    loop.run_in_executor(None, _safe_call, load_encoder, "embedding model")
+    # 2. Dense visible index — the hot data structure /filter slices into.
+    #    We wait for it; the first /api/filter must not pay this cost.
+    await loop.run_in_executor(None, _safe_call, get_visible_index, "visible index")
+
+    # 3. Embedding model + warm-up forward pass. ``load_encoder`` reads the
+    #    weights; ``encode_query`` runs one inference so the kernel cache,
+    #    tokenizer, and any lazy CUDA / MKL state are primed. We wait for
+    #    both so the first real /api/filter only does the user's query.
+    await loop.run_in_executor(None, _safe_call, load_encoder, "embedding model")
+    await loop.run_in_executor(None, _safe_call, _warm_encoder, "encoder warm-up")
+
+    # 4. Cercador index — not on the /filter path; let it finish in bg.
     loop.run_in_executor(None, _safe_call, prewarm_cercador, "cercador index")
 
     yield
+
+
+def _warm_encoder() -> None:
+    """Run one dummy encode so the model's first forward pass is paid
+    before any user query hits the API. Idempotent."""
+    from app.backend.core.encoder import encode_query
+    encode_query("warmup")
 
 
 def _safe_call(fn, label: str) -> None:

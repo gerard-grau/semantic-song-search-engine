@@ -16,14 +16,19 @@ from app.backend.api.schemas import (
 )
 from app.backend.core.data_loader import (
     attach_embeddings,
+    attach_genre_profiles,
     get_song_by_id,
     get_songs_by_ids,
+    get_visible_index,
     load_visible_songs,
 )
-from app.backend.core.embeddings import build_neighborhood, filter_embeddings
+from app.backend.core.embeddings import (
+    build_neighborhood,
+    filter_by_similarity_fast,
+    filter_embeddings_fast,
+)
 from app.backend.core.projections import (
     compute_neighborhood_2d,
-    compute_tsne_2d,
     get_all_projections_2d,
 )
 
@@ -56,22 +61,41 @@ def get_all_songs():
 
 @router.post("/filter", response_model=FilterResponse)
 def filter_songs(body: FilterRequest):
-    """Progressive filter. Embeddings are loaded only for the candidate set."""
-    songs = (
-        get_songs_by_ids(body.song_ids)
-        if body.song_ids is not None
-        else load_visible_songs()
-    )
-    attach_embeddings(songs)
+    """Progressive filter — text query OR similar-to-song mode.
 
-    survivors = filter_embeddings(query_text=body.query, songs=songs)
+    When ``similar_to_id`` is set the request is treated as a chip-style
+    "songs similar to X" filter; the text ``query`` is ignored in that mode.
+    Scoring runs on the dense pre-built visible index (built lazily on
+    first call) so each request is one matmul on a row slice rather than a
+    fresh (n, F, D) allocation.
+    """
+    index = get_visible_index()
+    songs = index["songs"]
+
+    if body.similar_to_id is not None:
+        scored = filter_by_similarity_fast(
+            focal_id=body.similar_to_id,
+            song_ids=body.song_ids,
+            index=index,
+        )
+    else:
+        scored = filter_embeddings_fast(
+            query_text=body.query,
+            song_ids=body.song_ids,
+            index=index,
+        )
+
+    survivors = [{**songs[idx], "score": score} for idx, score in scored]
     n = len(survivors)
-    proj_2d = compute_tsne_2d(survivors)
     message = f"Explora les {n} cançons per tu" if n <= 5 else None
 
+    # The frontend scatter always uses the pre-computed 2D projections from
+    # /api/songs and dims/highlights points by id, so /filter no longer
+    # recomputes a t-SNE for the survivors — that was the dominant cost on
+    # large surviving sets (seconds for n≈2500).
     return FilterResponse(
         songs=[_to_result(s) for s in survivors],
-        projections_2d=[Point2D(**p) for p in proj_2d],
+        projections_2d=[],
         total_remaining=n,
         message=message,
     )
@@ -86,6 +110,7 @@ def get_song_neighbors(body: NeighborsRequest):
         else load_visible_songs()
     )
     attach_embeddings(all_songs)
+    attach_genre_profiles(all_songs)
 
     neighborhood = build_neighborhood(
         focal_id=body.song_id,

@@ -34,12 +34,24 @@ csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
 logger = logging.getLogger(__name__)
 
-_DATA_DIR     = Path(__file__).parent.parent / "data"
-_PARQUET      = _DATA_DIR / "embedded_songs.parquet"
-_PARQUET_2D   = _DATA_DIR / "embedded_songs_2d.parquet"
-_META_PARQUET = _DATA_DIR / "songs_meta.parquet"
-_AUGMENTED    = _DATA_DIR / "augmented_songs.csv"
-_CANCONS      = _DATA_DIR / "cancons.csv"
+_DATA_DIR        = Path(__file__).parent.parent / "data"
+_PARQUET         = _DATA_DIR / "embedded_songs.parquet"
+_PARQUET_TOP5000 = _DATA_DIR / "embedded_songs_top5000.parquet"
+_PARQUET_2D      = _DATA_DIR / "embedded_songs_2d.parquet"
+_META_PARQUET    = _DATA_DIR / "songs_meta.parquet"
+_GENRES_PARQ     = _DATA_DIR / "embedded_songs_genres.parquet"
+_AUGMENTED       = _DATA_DIR / "augmented_songs.csv"
+_CANCONS         = _DATA_DIR / "cancons.csv"
+
+
+def _embeddings_source() -> Path:
+    """Prefer the pruned top-5000 parquet (~5000 rows) over the full catalog
+    (~80k rows). The top-5000 file is what data_pipeline writes; if it's
+    missing we fall back to the full file so older deployments keep working.
+    """
+    return _PARQUET_TOP5000 if _PARQUET_TOP5000.exists() else _PARQUET
+
+_genre_profile_cache: dict[int, np.ndarray] | None = None
 
 # Caches
 _all_metadata_cache:     list[dict] | None = None
@@ -48,7 +60,7 @@ _visible_metadata_cache: list[dict] | None = None
 _visible_id_index:       dict[int, dict] | None = None
 
 # ``_embedding_cache[id_lyrics]`` is the ``(F, D)`` float32 matrix of the song's
-# F per-field e5 embeddings, in EMBEDDING_FIELD_COLUMNS order. F=5, D=1024.
+# F per-field bge-m3 embeddings, in EMBEDDING_FIELD_COLUMNS order. F=5, D=1024.
 _embedding_cache:        dict[int, np.ndarray] = {}
 
 # Field order used by the late-fusion scorer.  Add/remove columns here to
@@ -192,7 +204,11 @@ def _iter_csv_rows(
             header = next(reader)
         except StopIteration:
             return
-        header = [re.sub(r"^[^\w]+", "", c) for c in header]
+        # Strip BOM-like leading junk from header names. Use ASCII-flagged \w
+        # so non-ASCII byte-order marks (e.g. ÿ from a latin-1-decoded UTF-16
+        # BOM, or U+FEFF) are also stripped — without it, "ÿartist" stays
+        # "ÿartist" and the artist field never gets populated downstream.
+        header = [re.sub(r"^[^\w]+", "", c, flags=re.ASCII).lstrip("﻿") for c in header]
         if id_column not in header:
             logger.warning("Column %r missing from %s header.", id_column, path.name)
             return
@@ -313,9 +329,10 @@ def load_embeddings_for_ids(ids: Iterable[int]) -> dict[int, np.ndarray]:
         return {}
     missing = wanted - _embedding_cache.keys()
     if missing:
-        if not _PARQUET.exists():
-            raise FileNotFoundError(f"Embeddings parquet not found at {_PARQUET}.")
-        pf = pq.ParquetFile(_PARQUET)
+        source = _embeddings_source()
+        if not source.exists():
+            raise FileNotFoundError(f"Embeddings parquet not found at {source}.")
+        pf = pq.ParquetFile(source)
         cols = ["id_lyrics", *EMBEDDING_FIELD_COLUMNS]
         # First pass: peek at row 0 to discover D so zero-fills are sized right.
         dim: int | None = None
@@ -344,6 +361,57 @@ def load_embeddings_for_ids(ids: Iterable[int]) -> dict[int, np.ndarray]:
             if not (missing - _embedding_cache.keys()):
                 break
     return {sid: _embedding_cache.get(sid) for sid in wanted}
+
+
+def _load_genre_profiles() -> dict[int, np.ndarray]:
+    """Build the ``id → softmax genre profile`` index from the genres parquet.
+
+    Cached for the process lifetime. Returns ``{}`` if the parquet is missing,
+    so callers that want optional genre weighting can no-op gracefully.
+    """
+    global _genre_profile_cache
+    if _genre_profile_cache is not None:
+        return _genre_profile_cache
+    if not _GENRES_PARQ.exists():
+        logger.info("Genre profiles unavailable (%s missing) — "
+                    "similarity will use lyrics only.", _GENRES_PARQ)
+        _genre_profile_cache = {}
+        return _genre_profile_cache
+    gdf = pq.read_table(
+        _GENRES_PARQ, columns=["id_lyrics", "genre_scores"]
+    ).to_pandas()
+    out: dict[int, np.ndarray] = {}
+    for sid, scores in zip(gdf["id_lyrics"], gdf["genre_scores"]):
+        arr = np.asarray(scores, dtype=np.float32)
+        if arr.size:
+            out[int(sid)] = arr
+    logger.info("Loaded %d genre profiles from %s", len(out), _GENRES_PARQ)
+    _genre_profile_cache = out
+    return out
+
+
+def get_genre_profile(song_id: int) -> np.ndarray | None:
+    """Return the softmax genre profile for a song, or ``None`` if unknown."""
+    return _load_genre_profiles().get(int(song_id))
+
+
+def attach_genre_profiles(songs: list[dict]) -> list[dict]:
+    """Attach the softmax genre profile to each song in-place. Idempotent.
+
+    Songs missing a profile get ``genre_profile = None``. Used by the
+    similarity scorer to add a small genre-alignment bonus on top of the
+    lyrics cosine.
+    """
+    profiles = _load_genre_profiles()
+    if not profiles:
+        for s in songs:
+            s.setdefault("genre_profile", None)
+        return songs
+    for s in songs:
+        if s.get("genre_profile") is not None:
+            continue
+        s["genre_profile"] = profiles.get(int(s["id"]))
+    return songs
 
 
 def attach_embeddings(songs: list[dict]) -> list[dict]:
@@ -476,8 +544,116 @@ def invalidate_cache() -> None:
     """Drop all in-memory caches — call after regenerating data files."""
     global _all_metadata_cache, _all_id_index
     global _visible_metadata_cache, _visible_id_index
+    global _genre_profile_cache, _visible_index
     _all_metadata_cache = None
     _all_id_index = None
     _visible_metadata_cache = None
     _visible_id_index = None
+    _genre_profile_cache = None
     _embedding_cache.clear()
+    _visible_index = None
+
+
+# ---------------------------------------------------------------------------
+# Dense visible-set index — the hot path for /filter
+# ---------------------------------------------------------------------------
+#
+# All visible-song embeddings packed into one contiguous float32 cube,
+# pre-normalised, so every /filter call becomes a single matmul on a row
+# slice instead of allocating + populating a fresh (n, F, D) block each
+# time. Built once, lazily, on first use; ~100 MB for 5000 songs × 5 fields
+# × 1024 dims.
+
+_visible_index: dict | None = None
+
+
+def get_visible_index() -> dict:
+    """Return the in-memory dense index over visible songs (cached).
+
+    Keys
+    ----
+    matrix       : (N, F, D) float32 — per-field embeddings, L2-normalised
+                   row-wise. Rows for missing fields are zero (and excluded
+                   via ``valid``).
+    valid        : (N, F) bool       — flag matching ``matrix`` rows.
+    genre_matrix : (N, G) float32 | None — softmax genre profiles,
+                   L2-normalised; ``None`` if no profiles available.
+    genre_valid  : (N,) bool | None  — flag per song for ``genre_matrix``.
+    id_to_idx    : dict[int, int]    — song id → row in ``matrix``.
+    songs        : list[dict]        — the underlying visible-song dicts,
+                   in matrix row order. Stable; safe to index by row.
+
+    Cost: one parquet read + one normalisation pass at first call. Every
+    query after that is O(n·F·D) matmul on a row slice.
+    """
+    global _visible_index
+    if _visible_index is not None:
+        return _visible_index
+
+    songs = load_visible_songs()
+    if not songs:
+        _visible_index = {
+            "matrix":       np.zeros((0, 0, 0), dtype=np.float32),
+            "valid":        np.zeros((0, 0), dtype=bool),
+            "genre_matrix": None,
+            "genre_valid":  None,
+            "id_to_idx":    {},
+            "songs":        songs,
+        }
+        return _visible_index
+
+    attach_embeddings(songs)
+    attach_genre_profiles(songs)
+
+    matrices = [s.get("embedding_fields") for s in songs]
+    F = max((m.shape[0] for m in matrices if m is not None), default=0)
+    D = next((m.shape[1] for m in matrices if m is not None), 0)
+    N = len(songs)
+
+    matrix = np.zeros((N, F, D), dtype=np.float32)
+    valid  = np.zeros((N, F), dtype=bool)
+    if F > 0 and D > 0:
+        for i, m in enumerate(matrices):
+            if m is None or m.size == 0 or m.shape[1] != D:
+                continue
+            f = min(m.shape[0], F)
+            block = m[:f].astype(np.float32, copy=False)
+            norms = np.linalg.norm(block, axis=1)
+            ok = norms > 1e-9
+            block_n = block.copy()
+            block_n[ok] = block[ok] / norms[ok, None]
+            matrix[i, :f, :] = block_n
+            valid[i, :f] = ok
+
+    profiles = [s.get("genre_profile") for s in songs]
+    G = next((p.shape[0] for p in profiles if p is not None), 0)
+    genre_matrix: np.ndarray | None = None
+    genre_valid: np.ndarray | None = None
+    if G > 0:
+        genre_matrix = np.zeros((N, G), dtype=np.float32)
+        genre_valid  = np.zeros(N, dtype=bool)
+        for i, p in enumerate(profiles):
+            if p is None or p.size != G:
+                continue
+            pv = p.astype(np.float32, copy=False)
+            n_ = float(np.linalg.norm(pv))
+            if n_ < 1e-9:
+                continue
+            genre_matrix[i] = pv / n_
+            genre_valid[i] = True
+
+    id_to_idx = {int(s["id"]): i for i, s in enumerate(songs)}
+
+    _visible_index = {
+        "matrix":       matrix,
+        "valid":        valid,
+        "genre_matrix": genre_matrix,
+        "genre_valid":  genre_valid,
+        "id_to_idx":    id_to_idx,
+        "songs":        songs,
+    }
+    logger.info(
+        "Built visible index: N=%d, F=%d, D=%d, genre G=%d (%.1f MB).",
+        N, F, D, G, matrix.nbytes / 1e6,
+    )
+    return _visible_index

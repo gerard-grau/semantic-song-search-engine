@@ -8,7 +8,7 @@ from transformers import AutoTokenizer, AutoModel
 # ── Config ────────────────────────────────────────────────────────────────────
 CSV_PATH        = "../augmented_songs.csv"
 OUTPUT_PATH     = "embedded_songs.pt"       # save as torch file
-MODEL_NAME      = "intfloat/multilingual-e5-base"
+MODEL_NAME      = "BAAI/bge-m3"
 BATCH_SIZE      = 64                        # number of text pieces per forward pass
 DEVICE          = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -19,17 +19,15 @@ model     = AutoModel.from_pretrained(MODEL_NAME).to(DEVICE)
 model.eval()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def mean_pool(token_embeddings: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-    """Mean pool token embeddings, ignoring padding tokens."""
-    mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    return (token_embeddings * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1e-9)
+def cls_pool(token_embeddings: torch.Tensor) -> torch.Tensor:
+    """bge-m3 dense-retrieval head uses the [CLS] token at position 0."""
+    return token_embeddings[:, 0]
 
 @torch.no_grad()
 def embed_texts(texts: list[str]) -> torch.Tensor:
     """
     Embed a list of strings in batches.
-    multilingual-e5 expects a 'query: ' or 'passage: ' prefix.
-    Lyrics/chunks are passages; title/author are queries.
+    bge-m3 does not use prefixes (unlike multilingual-e5).
     Returns a (N, hidden_size) tensor.
     """
     all_embeddings = []
@@ -43,7 +41,7 @@ def embed_texts(texts: list[str]) -> torch.Tensor:
             return_tensors="pt"
         ).to(DEVICE)
         output = model(**encoded)
-        emb = mean_pool(output.last_hidden_state, encoded["attention_mask"])
+        emb = cls_pool(output.last_hidden_state)
         emb = torch.nn.functional.normalize(emb, p=2, dim=-1)   # L2 normalize
         all_embeddings.append(emb.cpu())
     return torch.cat(all_embeddings, dim=0)
@@ -68,42 +66,41 @@ def preembed_songs(csv_path: str, output_path: str):
     records = []
     for _, row in tqdm(df.iterrows(), total=len(df)):
 
-        # -- Prefix convention for multilingual-e5 --
-        # passages = lyrics content, queries = metadata fields
-        chunks        = [f"passage: {c}" for c in row["lyrics_chunks"]  if isinstance(c, str)]
-        noised_chunks = [f"passage: {c}" for c in row["noised_chunks"] if isinstance(c, str)]
-        title         = f"query: {row['title']}"        if isinstance(row["title"],         str) else None
-        noised_title  = f"query: {row['noised_title']}" if isinstance(row["noised_title"],  str) else None
-        author        = f"query: {row['author']}"       if isinstance(row["author"],        str) else None
-        noised_author = f"query: {row['noised_author']}"if isinstance(row["noised_author"], str) else None
+        # bge-m3 does not use prefixes — feed raw text directly.
+        chunks        = [c for c in row["lyrics_chunks"]  if isinstance(c, str)]
+        noised_chunks = [c for c in row["noised_chunks"] if isinstance(c, str)]
+        title         = row["title"]         if isinstance(row["title"],         str) else None
+        noised_title  = row["noised_title"]  if isinstance(row["noised_title"],  str) else None
+        author        = row["author"]        if isinstance(row["author"],        str) else None
+        noised_author = row["noised_author"] if isinstance(row["noised_author"], str) else None
 
         # -- Embed chunks & aggregate --
         if chunks:
             chunk_embs        = embed_texts(chunks)
             song_emb          = aggregate_chunk_embeddings(chunk_embs)
         else:
-            song_emb          = torch.zeros(768)        # fallback for empty lyrics
+            song_emb          = torch.zeros(1024)       # fallback for empty lyrics
 
         if noised_chunks:
             noised_chunk_embs = embed_texts(noised_chunks)
             noised_song_emb   = aggregate_chunk_embeddings(noised_chunk_embs)
         else:
-            noised_song_emb   = torch.zeros(768)
+            noised_song_emb   = torch.zeros(1024)
 
         # -- Embed title & author --
-        title_emb         = embed_texts([title])[0]         if title         else torch.zeros(768)
-        noised_title_emb  = embed_texts([noised_title])[0]  if noised_title  else torch.zeros(768)
-        author_emb        = embed_texts([author])[0]        if author        else torch.zeros(768)
-        noised_author_emb = embed_texts([noised_author])[0] if noised_author else torch.zeros(768)
+        title_emb         = embed_texts([title])[0]         if title         else torch.zeros(1024)
+        noised_title_emb  = embed_texts([noised_title])[0]  if noised_title  else torch.zeros(1024)
+        author_emb        = embed_texts([author])[0]        if author        else torch.zeros(1024)
+        noised_author_emb = embed_texts([noised_author])[0] if noised_author else torch.zeros(1024)
 
         records.append({
             "song_id":          _,
-            "song_emb":         song_emb,           # (768,)
-            "noised_song_emb":  noised_song_emb,    # (768,)
-            "title_emb":        title_emb,           # (768,)
-            "noised_title_emb": noised_title_emb,   # (768,)
-            "author_emb":       author_emb,          # (768,)
-            "noised_author_emb":noised_author_emb,  # (768,)
+            "song_emb":         song_emb,           # (1024,)
+            "noised_song_emb":  noised_song_emb,    # (1024,)
+            "title_emb":        title_emb,           # (1024,)
+            "noised_title_emb": noised_title_emb,   # (1024,)
+            "author_emb":       author_emb,          # (1024,)
+            "noised_author_emb":noised_author_emb,  # (1024,)
         })
 
     torch.save(records, output_path)

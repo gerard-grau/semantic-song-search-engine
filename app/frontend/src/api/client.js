@@ -15,6 +15,14 @@ export async function filterSongs(query, songIds = null) {
   return data
 }
 
+export async function filterSimilarTo(songId, songIds = null) {
+  const { data } = await api.post('/filter', {
+    similar_to_id: songId,
+    song_ids: songIds,
+  })
+  return data
+}
+
 export async function fetchSongDetail(songId) {
   const { data } = await api.get(`/songs/${songId}`)
   return data

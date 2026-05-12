@@ -1,30 +1,28 @@
-import { useRef, useEffect, useCallback } from 'react'
-import { genreColor, GENRE_COLORS, hexToRgb } from './genreColors'
+import { useRef, useEffect, useState, useCallback } from 'react'
+import { genreColor, GENRE_COLORS } from './genreColors'
 
 /**
- * 2D Scatter — design-style rendering inspired by Cançoner.html.
+ * 2D Scatter — chip-driven filter visualization.
  *
- * All songs are always visible. Filtering/similarity only changes opacity.
- * Active songs: full opacity. Inactive songs: dimmed (opacity 0.18).
- * No size scaling — all nodes same size.
- *
- * Visual style from the design reference:
- *   - Outer glow halo when active/hovered
- *   - Genre-colored filled circle with subtle stroke
- *   - White inner dot when selected/focal
- *   - Labels: title above, artist·year below (visible on hover or focal)
+ * All songs are always visible. Filtered-out items lose their genre colour
+ * (rendered as a muted grey) and fade to low opacity; matched items keep the
+ * genre colour at full opacity. A click on a point opens a small in-canvas
+ * popover with "Cerca similars" / "Veure detall" actions.
  */
 export default function Scatter2D({
-  points, activeIds, scoreMap, focalId,
-  highlightedId, onPointHover, onPointClick, onPointDoubleClick,
+  points, activeIds, focalId,
+  highlightedId, onPointHover, onPointSearchSimilar, onPointOpenDetail,
 }) {
   const canvasRef = useRef(null)
+  const containerRef = useRef(null)
   const viewRef = useRef({ panX: 0, panY: 0, zoom: 1 })
   const baseTransformRef = useRef({ scale: 1, offsetX: 0, offsetY: 0 })
-  const dragRef = useRef({ dragging: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 })
+  const dragRef = useRef({ dragging: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0, moved: false })
   const initedRef = useRef(false)
   const drawRef = useRef(null)
-  const dblClickTimerRef = useRef(null)
+
+  // Popover state — opens on point click, anchored to the point in screen space.
+  const [popover, setPopover] = useState(null) // { id, x, y, title, artist }
 
   const getBaseTransform = useCallback((w, h, pts) => {
     if (!pts.length) return { scale: 1, offsetX: 0, offsetY: 0 }
@@ -77,167 +75,173 @@ export default function Scatter2D({
     }
 
     const hasFilter = activeIds != null
-    // Dots scale with zoom on a sqrt curve: visibly responsive but tapers off
-    // so they don't dominate the canvas at high zoom levels.
     const NODE_R = 1.25 * Math.sqrt(viewRef.current.zoom)
 
-    // Read theme-aware label colors from CSS tokens so canvas matches the page.
     const cs = getComputedStyle(document.documentElement)
     const labelInk = cs.getPropertyValue('--ink').trim() || '#15151A'
     const labelMute = cs.getPropertyValue('--ink-soft').trim() || '#5D6D7E'
+    // Filtered-out points: softer, lighter — they should recede into the
+    // background so the matched set can be read at a glance.
+    const dimColor = cs.getPropertyValue('--ink-mute').trim() || '#6B6B75'
 
-    // Helper to draw a node in the design style
-    function drawNode(p, opacity, isHovered, isFocal) {
+    function drawDimNode(p) {
+      const { x: px, y: py } = pointToScreen(p, bt)
+      const r = NODE_R
+      ctx.beginPath()
+      ctx.arc(px, py, r * 0.7, 0, Math.PI * 2)
+      ctx.fillStyle = dimColor
+      ctx.globalAlpha = 0.22
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
+
+    function drawActiveNode(p) {
+      // Matched points: bigger halo + fully opaque core + dark outline.
+      // The outline uses the theme's ink colour so each point reads as a
+      // crisp, solid mark against the dimmed background — the eye snaps
+      // to the active set instead of the noise of grey dots.
       const { x: px, y: py } = pointToScreen(p, bt)
       const color = genreColor(p.genre)
       const r = NODE_R
 
-      if (isFocal) {
-        // Diamond shape for focal song
-        ctx.globalAlpha = 1
-
-        // Outer ring
-        ctx.beginPath()
-        ctx.arc(px, py, r * 2.4, 0, Math.PI * 2)
-        ctx.strokeStyle = color
-        ctx.globalAlpha = 0.35
-        ctx.lineWidth = 1.5
-        ctx.stroke()
-        ctx.globalAlpha = 1
-
-        // Diamond
-        const s = r * 1.1
-        ctx.save()
-        ctx.translate(px, py)
-        ctx.rotate(Math.PI / 4)
-        ctx.beginPath()
-        ctx.rect(-s, -s, s * 2, s * 2)
-        ctx.fillStyle = color
-        ctx.fill()
-        ctx.strokeStyle = '#fff'
-        ctx.lineWidth = 2
-        ctx.stroke()
-        ctx.restore()
-
-        // Label (constant size)
-        const labelSz = 13
-        ctx.font = `600 ${labelSz}px Inter, system-ui, sans-serif`
-        ctx.textAlign = 'center'
-        ctx.fillStyle = color
-        ctx.fillText(p.title, px, py - r * 2.8 - 4)
-        const subSz = 11
-        ctx.font = `${subSz}px Inter, system-ui, sans-serif`
-        ctx.fillStyle = labelMute
-        ctx.fillText(`${p.artist}`, px, py - r * 2.8 - 4 - labelSz - 2)
-        ctx.globalAlpha = 1
-        return
-      }
-
-      if (isHovered) {
-        ctx.globalAlpha = 1
-
-        // Glow halo
-        ctx.beginPath()
-        ctx.arc(px, py, r * 3, 0, Math.PI * 2)
-        ctx.fillStyle = color
-        ctx.globalAlpha = 0.14
-        ctx.fill()
-
-        // Outer soft ring
-        ctx.beginPath()
-        ctx.arc(px, py, r * 2, 0, Math.PI * 2)
-        ctx.fillStyle = color
-        ctx.globalAlpha = 0.28
-        ctx.fill()
-
-        // Main circle (slightly larger on hover)
-        ctx.beginPath()
-        ctx.arc(px, py, r * 1.2, 0, Math.PI * 2)
-        ctx.fillStyle = color
-        ctx.globalAlpha = 1
-        ctx.fill()
-        ctx.strokeStyle = '#fff'
-        ctx.lineWidth = 2
-        ctx.stroke()
-
-        // Label (constant size)
-        const labelSz = 13
-        ctx.font = `600 ${labelSz}px Inter, system-ui, sans-serif`
-        ctx.textAlign = 'center'
-        ctx.fillStyle = labelInk
-        ctx.fillText(p.title, px, py - r - 12)
-        const subSz = 11
-        ctx.font = `${subSz}px Inter, system-ui, sans-serif`
-        ctx.fillStyle = labelMute
-        ctx.fillText(`${p.artist} · ${p.year || ''}`, px, py - r - 12 - labelSz - 2)
-        ctx.globalAlpha = 1
-        return
-      }
-
-      // Normal node — design style: outer halo + inner fill + stroke
-      const isActive = opacity > 0.5
-
-      if (isActive) {
-        // Soft outer ring for active nodes
-        ctx.beginPath()
-        ctx.arc(px, py, r * 1.6, 0, Math.PI * 2)
-        ctx.fillStyle = color
-        ctx.globalAlpha = 0.08
-        ctx.fill()
-      }
-
-      // Main circle — always genre-colored
       ctx.beginPath()
-      ctx.arc(px, py, r, 0, Math.PI * 2)
+      ctx.arc(px, py, r * 1.9, 0, Math.PI * 2)
       ctx.fillStyle = color
-      ctx.globalAlpha = isActive ? 0.88 : 0.35
+      ctx.globalAlpha = 0.18
       ctx.fill()
-      ctx.strokeStyle = color
-      ctx.lineWidth = isActive ? 1.5 : 1
-      ctx.globalAlpha = isActive ? 0.65 : 0.4
-      ctx.stroke()
 
+      ctx.beginPath()
+      ctx.arc(px, py, r * 1.15, 0, Math.PI * 2)
+      ctx.fillStyle = color
+      ctx.globalAlpha = 1
+      ctx.fill()
+      ctx.strokeStyle = labelInk
+      ctx.globalAlpha = 0.55
+      ctx.lineWidth = 1
+      ctx.stroke()
       ctx.globalAlpha = 1
     }
 
-    // ── Layer 1: Dimmed nodes ──
+    function drawHoveredNode(p) {
+      const { x: px, y: py } = pointToScreen(p, bt)
+      const color = genreColor(p.genre)
+      const r = NODE_R
+
+      ctx.beginPath()
+      ctx.arc(px, py, r * 3, 0, Math.PI * 2)
+      ctx.fillStyle = color
+      ctx.globalAlpha = 0.14
+      ctx.fill()
+
+      ctx.beginPath()
+      ctx.arc(px, py, r * 2, 0, Math.PI * 2)
+      ctx.fillStyle = color
+      ctx.globalAlpha = 0.28
+      ctx.fill()
+
+      ctx.beginPath()
+      ctx.arc(px, py, r * 1.2, 0, Math.PI * 2)
+      ctx.fillStyle = color
+      ctx.globalAlpha = 1
+      ctx.fill()
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+
+      const labelSz = 13
+      ctx.font = `600 ${labelSz}px Inter, system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.fillStyle = labelInk
+      ctx.fillText(p.title, px, py - r - 12)
+      const subSz = 11
+      ctx.font = `${subSz}px Inter, system-ui, sans-serif`
+      ctx.fillStyle = labelMute
+      ctx.fillText(`${p.artist} · ${p.year || ''}`, px, py - r - 12 - labelSz - 2)
+      ctx.globalAlpha = 1
+    }
+
+    function drawFocalNode(p) {
+      const { x: px, y: py } = pointToScreen(p, bt)
+      const color = genreColor(p.genre)
+      const r = NODE_R
+
+      ctx.beginPath()
+      ctx.arc(px, py, r * 2.4, 0, Math.PI * 2)
+      ctx.strokeStyle = color
+      ctx.globalAlpha = 0.35
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+      ctx.globalAlpha = 1
+
+      const s = r * 1.1
+      ctx.save()
+      ctx.translate(px, py)
+      ctx.rotate(Math.PI / 4)
+      ctx.beginPath()
+      ctx.rect(-s, -s, s * 2, s * 2)
+      ctx.fillStyle = color
+      ctx.fill()
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      ctx.restore()
+
+      const labelSz = 13
+      ctx.font = `600 ${labelSz}px Inter, system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.fillStyle = color
+      ctx.fillText(p.title, px, py - r * 2.8 - 4)
+      const subSz = 11
+      ctx.font = `${subSz}px Inter, system-ui, sans-serif`
+      ctx.fillStyle = labelMute
+      ctx.fillText(`${p.artist}`, px, py - r * 2.8 - 4 - labelSz - 2)
+    }
+
+    // Layer 1 — dimmed (filtered-out) nodes, colour stripped.
     if (hasFilter) {
       for (const p of points) {
         if (activeIds.has(p.id)) continue
         if (p.id === highlightedId) continue
-        drawNode(p, 0.35, false, false)
+        drawDimNode(p)
       }
     }
 
-    // ── Layer 2: Active nodes (or all if no filter) ──
+    // Layer 2 — active nodes (or all if no filter), genre colour.
     for (const p of points) {
       if (p.id === highlightedId) continue
       if (p.id === focalId) continue
       if (hasFilter && !activeIds.has(p.id)) continue
-      drawNode(p, hasFilter ? 0.9 : 0.75, false, false)
+      drawActiveNode(p)
     }
 
-    // ── Layer 3: Focal (diamond) ──
+    // Layer 3 — focal (diamond).
     if (focalId != null) {
       const fp = points.find(p => p.id === focalId)
-      if (fp && fp.id !== highlightedId) {
-        drawNode(fp, 1, false, true)
-      }
+      if (fp && fp.id !== highlightedId) drawFocalNode(fp)
     }
 
-    // ── Layer 4: Hovered ──
+    // Layer 4 — hovered.
     if (highlightedId != null) {
       const hp = points.find(p => p.id === highlightedId)
-      if (hp) {
-        drawNode(hp, 1, true, hp.id === focalId)
-      }
+      if (hp) drawHoveredNode(hp)
     }
-  }, [points, activeIds, scoreMap, focalId, highlightedId, getBaseTransform])
+  }, [points, activeIds, focalId, highlightedId, getBaseTransform])
 
   useEffect(() => { drawRef.current = draw }, [draw])
 
   useEffect(() => {
     initedRef.current = false
+    setPopover(null)
+  }, [points])
+
+  // Re-anchor the popover when the view changes (zoom/pan/resize).
+  useEffect(() => {
+    if (!popover) return
+    const p = points.find(pt => pt.id === popover.id)
+    if (!p) { setPopover(null); return }
+    const { x, y } = pointToScreen(p, baseTransformRef.current)
+    setPopover(prev => prev && (prev.x === x && prev.y === y ? prev : { ...prev, x, y }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points])
 
   useEffect(() => {
@@ -252,8 +256,6 @@ export default function Scatter2D({
   }
 
   function findClosestPoint(mx, my) {
-    // Hit radius tracks the current dot size (zoom-dependent) with a floor so
-    // tiny dots remain clickable when zoomed out.
     let closest = null
     let closestDist = Math.max(10, 1.25 * Math.sqrt(viewRef.current.zoom) + 6)
     for (const p of points) {
@@ -274,6 +276,10 @@ export default function Scatter2D({
     if (dragRef.current.dragging) {
       const dx = e.clientX - dragRef.current.startX
       const dy = e.clientY - dragRef.current.startY
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        dragRef.current.moved = true
+        if (popover) setPopover(null)
+      }
       viewRef.current.panX = dragRef.current.startPanX + dx
       viewRef.current.panY = dragRef.current.startPanY + dy
       draw()
@@ -294,38 +300,37 @@ export default function Scatter2D({
       startY: e.clientY,
       startPanX: viewRef.current.panX,
       startPanY: viewRef.current.panY,
+      moved: false,
     }
   }
 
   function handleMouseUp(e) {
     const wasDragging = dragRef.current.dragging
-    const dx = Math.abs(e.clientX - dragRef.current.startX)
-    const dy = Math.abs(e.clientY - dragRef.current.startY)
+    const moved = dragRef.current.moved
     dragRef.current.dragging = false
+    dragRef.current.moved = false
 
-    if (wasDragging && dx < 4 && dy < 4) {
-      const canvas = canvasRef.current
-      if (!canvas) return
-      const rect = canvas.getBoundingClientRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
-      const closest = findClosestPoint(mx, my)
+    if (!wasDragging || moved) return
 
-      if (closest) {
-        if (dblClickTimerRef.current && dblClickTimerRef.current.id === closest.id) {
-          clearTimeout(dblClickTimerRef.current.timer)
-          dblClickTimerRef.current = null
-          onPointDoubleClick?.(closest.id)
-        } else {
-          if (dblClickTimerRef.current) clearTimeout(dblClickTimerRef.current.timer)
-          const timer = setTimeout(() => {
-            dblClickTimerRef.current = null
-            onPointClick(closest.id)
-          }, 250)
-          dblClickTimerRef.current = { id: closest.id, timer }
-        }
-      }
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const mx = e.clientX - rect.left
+    const my = e.clientY - rect.top
+    const closest = findClosestPoint(mx, my)
+    if (!closest) {
+      setPopover(null)
+      return
     }
+
+    const sp = getScreenPos(closest)
+    setPopover({
+      id: closest.id,
+      x: sp.x,
+      y: sp.y,
+      title: closest.title,
+      artist: closest.artist,
+    })
   }
 
   function handleWheel(e) {
@@ -343,11 +348,14 @@ export default function Scatter2D({
     viewRef.current.zoom = newZoom
     viewRef.current.panX = mx - worldX * newZoom
     viewRef.current.panY = my - worldY * newZoom
+    if (popover) setPopover(null)
     draw()
   }
 
+  function closePopover() { setPopover(null) }
+
   return (
-    <div className="viz-container">
+    <div className="viz-container" ref={containerRef}>
       <canvas
         ref={canvasRef}
         className="viz-canvas"
@@ -358,6 +366,45 @@ export default function Scatter2D({
         onWheel={handleWheel}
         style={{ cursor: dragRef.current?.dragging ? 'grabbing' : 'grab' }}
       />
+      {popover && (
+        <div
+          className="viz-popover"
+          style={{ left: popover.x, top: popover.y }}
+          onMouseDown={e => e.stopPropagation()}
+        >
+          <div className="viz-popover-header">
+            <div className="viz-popover-title" title={popover.title}>{popover.title}</div>
+            <div className="viz-popover-artist" title={popover.artist}>{popover.artist}</div>
+          </div>
+          <div className="viz-popover-actions">
+            <button
+              className="viz-popover-btn viz-popover-btn--primary"
+              onClick={() => {
+                onPointSearchSimilar?.(popover.id, popover.title)
+                closePopover()
+              }}
+            >
+              Cerca similars
+            </button>
+            <button
+              className="viz-popover-btn"
+              onClick={() => {
+                onPointOpenDetail?.(popover.id)
+                closePopover()
+              }}
+            >
+              Veure detall
+            </button>
+            <button
+              className="viz-popover-btn viz-popover-btn--close"
+              onClick={closePopover}
+              aria-label="Tanca"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       <div className="viz-legend">
         {Object.entries(GENRE_COLORS).map(([g, c]) => (
           <span key={g} className="legend-item">
@@ -366,7 +413,7 @@ export default function Scatter2D({
           </span>
         ))}
         <span className="legend-item legend-hint">
-          clic = similars | doble clic = detall
+          clic = opcions
         </span>
       </div>
     </div>

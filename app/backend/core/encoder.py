@@ -15,12 +15,13 @@ import torch
 logger = logging.getLogger(__name__)
 
 # ── Change these when switching models ────────────────────────────────────────
-# embedded_songs.parquet was generated with multilingual-e5-large (1024-dim);
-# the query encoder must match or filter_embeddings falls back to word overlap.
-MODEL_NAME     = "intfloat/multilingual-e5-large"
+# embedded_songs.parquet was generated with BAAI/bge-m3 (1024-dim, CLS pooling,
+# no prefixes); the query encoder must match or filter_embeddings falls back to
+# word overlap.
+MODEL_NAME     = "BAAI/bge-m3"
 MODEL_DIM      = 1024       # output dimension; must match MODEL_NAME
-QUERY_PREFIX   = "query: "  # prepended to search queries at inference time
-PASSAGE_PREFIX = "passage: "  # prepended to song texts at embedding time
+QUERY_PREFIX   = ""         # bge-m3 does not use prefixes
+PASSAGE_PREFIX = ""         # bge-m3 does not use prefixes
 
 
 def build_song_passage(song: dict) -> str:
@@ -61,9 +62,9 @@ def load_encoder():
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-def _mean_pool(token_emb: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-    mask = attention_mask.unsqueeze(-1).float()
-    return (token_emb * mask).sum(1) / mask.sum(1).clamp(min=1e-9)
+def _cls_pool(token_emb: torch.Tensor) -> torch.Tensor:
+    # bge-m3 dense-retrieval head reads the [CLS] token at position 0.
+    return token_emb[:, 0]
 
 
 # ── Public encoding API ───────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ def encode_query(text: str) -> list[float]:
     """
     Encode a user search query.
 
-    Prepends QUERY_PREFIX before encoding.
+    Prepends QUERY_PREFIX (empty for bge-m3) before encoding.
     Returns an L2-normalised MODEL_DIM vector.
     """
     tokenizer, model, device = load_encoder()
@@ -85,7 +86,7 @@ def encode_query(text: str) -> list[float]:
     ).to(device)
     with torch.no_grad():
         out = model(**enc)
-    vec = _mean_pool(out.last_hidden_state, enc["attention_mask"])
+    vec = _cls_pool(out.last_hidden_state)
     vec = torch.nn.functional.normalize(vec, p=2, dim=-1)
     return vec[0].cpu().tolist()
 
@@ -109,7 +110,7 @@ def encode_passages(texts: list[str], batch_size: int = 16) -> list[list[float]]
             return_tensors="pt",
         ).to(device)
         out = model(**enc)
-        vecs = _mean_pool(out.last_hidden_state, enc["attention_mask"])
+        vecs = _cls_pool(out.last_hidden_state)
         vecs = torch.nn.functional.normalize(vecs, p=2, dim=-1)
         all_vecs.extend(vecs.cpu().tolist())
         print(f"  encoded {min(i + batch_size, len(texts))}/{len(texts)}", end="\r")

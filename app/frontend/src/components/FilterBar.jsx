@@ -1,5 +1,16 @@
 import { useState } from 'react'
 
+/**
+ * Filter bar with typed chips.
+ *
+ * `chips` is now an array of `{ kind, label }` objects:
+ *   - kind: 'query'   — free-text semantic search (filters by lyrics + multi-field)
+ *   - kind: 'similar' — "songs similar to X" filter from a point click
+ *
+ * Both kinds are removable and visually distinct (similar chips wear the
+ * accent colour so the user can tell at a glance which constraints are
+ * active).
+ */
 export default function FilterBar({ chips, onAddChip, onRemoveChip, onReset, isLoading }) {
   const [input, setInput] = useState('')
 
@@ -15,19 +26,27 @@ export default function FilterBar({ chips, onAddChip, onRemoveChip, onReset, isL
   return (
     <form className="filter-bar" onSubmit={handleSubmit}>
       <div className="filter-chips-input">
-        {chips.map((chip, i) => (
-          <span key={i} className="filter-chip">
-            {chip}
-            <button
-              type="button"
-              className="filter-chip-remove"
-              onClick={() => onRemoveChip(i)}
-              disabled={isLoading}
+        {chips.map((chip, i) => {
+          const isSimilar = chip.kind === 'similar'
+          return (
+            <span
+              key={i}
+              className={`filter-chip${isSimilar ? ' filter-chip--similar' : ''}`}
             >
-              ×
-            </button>
-          </span>
-        ))}
+              {isSimilar && <span className="filter-chip-icon" aria-hidden="true">≈</span>}
+              {chip.label}
+              <button
+                type="button"
+                className="filter-chip-remove"
+                onClick={() => onRemoveChip(i)}
+                disabled={isLoading}
+                aria-label="Treu filtre"
+              >
+                ×
+              </button>
+            </span>
+          )
+        })}
         <input
           type="text"
           className="filter-input"

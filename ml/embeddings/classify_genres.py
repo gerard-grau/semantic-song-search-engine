@@ -1,8 +1,8 @@
 """
 Zero-shot genre classification of catalogue songs.
 
-Encodes a small set of genre labels with a multilingual E5 model (same family
-that produced ``embedded_songs.parquet``) and scores every song against every
+Encodes a small set of genre labels with BAAI/bge-m3 (the same model that
+produced ``embedded_songs.parquet``) and scores every song against every
 label by cosine similarity. The softmax over those scores is the per-song
 "genre profile" used downstream by ``data_pipeline.py`` to bias the 2-D
 projection toward genre clusters.
@@ -28,7 +28,7 @@ Usage:
     .venv/bin/python -m ml.embeddings.classify_genres --prior uniform
     .venv/bin/python -m ml.embeddings.classify_genres --prior rock=0.35,pop=0.30,cançó-autor=0.20,folk=0.05,rumba=0.05,electronica=0.02,hip-hop=0.02,punk=0.01
     .venv/bin/python -m ml.embeddings.classify_genres --temperature 25
-    .venv/bin/python -m ml.embeddings.classify_genres --model intfloat/multilingual-e5-base
+    .venv/bin/python -m ml.embeddings.classify_genres --model BAAI/bge-m3
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 #
 # Slug (machine key) → human-readable description fed to the encoder.
 # Labels are intentionally in Catalan because the corpus is Catalan music and
-# E5 is multilingual. Edit this dict to add / remove / rephrase genres.
+# bge-m3 is multilingual. Edit this dict to add / remove / rephrase genres.
 #
 # After editing, re-run this script AND regenerate the projection.
 # The frontend ``genreColors.js`` must contain a colour for every slug, or new
@@ -97,11 +97,11 @@ TARGET_PRIORS: dict[str, dict[str, float]] = {
     )},
 }
 
-DEFAULT_MODEL       = "intfloat/multilingual-e5-large"
+DEFAULT_MODEL       = "BAAI/bge-m3"
 DEFAULT_TEMPERATURE = 20.0   # softmax sharpness: higher = more peaked
 DEFAULT_PRIOR       = "none" # disabled by default; pass --prior catalan|uniform|...
                              # to recalibrate toward a target distribution
-LABEL_PREFIX        = "query: "
+LABEL_PREFIX        = ""     # bge-m3 does not use prefixes
 
 
 _DATA_DIR    = Path(__file__).resolve().parents[2] / "app" / "backend" / "data"
@@ -148,16 +148,16 @@ def _encode_labels(model_name: str, expected_dim: int) -> tuple[list[str], np.nd
     ).to(device)
     with torch.no_grad():
         out = mdl(**enc)
-    mask   = enc["attention_mask"].unsqueeze(-1).float()
-    pooled = (out.last_hidden_state * mask).sum(1) / mask.sum(1).clamp(min=1e-9)
+    # bge-m3 dense-retrieval head uses the [CLS] token at position 0.
+    pooled = out.last_hidden_state[:, 0]
     pooled = torch.nn.functional.normalize(pooled, p=2, dim=-1)
     vecs   = pooled.cpu().numpy().astype(np.float32)
 
     if vecs.shape[1] != expected_dim:
         raise ValueError(
             f"Label embeddings have dim {vecs.shape[1]} but songs have dim "
-            f"{expected_dim}. Pick a compatible E5 variant via --model "
-            "(small=384, base=768, large=1024)."
+            f"{expected_dim}. Use BAAI/bge-m3 (1024-dim) — the model that "
+            "produced embedded_songs.parquet."
         )
     return list(GENRE_LABELS.keys()), vecs
 
@@ -220,12 +220,46 @@ def _apply_prior_correction(profile: np.ndarray, target: np.ndarray) -> np.ndarr
 
 # ─── Public entry point ─────────────────────────────────────────────────────
 
+def _existing_distribution() -> dict | None:
+    """Read the already-written parquet and return a summary dict.
+
+    Used to short-circuit the classifier when the output is already on disk —
+    avoids a 2 GB model re-download every time the script is invoked.
+    """
+    if not _OUTPUT_FILE.exists():
+        return None
+    df = pq.read_table(_OUTPUT_FILE, columns=["id_lyrics", "genre"]).to_pandas()
+    counts = df["genre"].value_counts()
+    logger.info(
+        "Output %s already exists with %d rows — skipping. "
+        "Pass --force to regenerate.", _OUTPUT_FILE, len(df),
+    )
+    logger.info("Genre distribution:\n%s", counts.to_string())
+    return {
+        "rows":         len(df),
+        "labels":       list(GENRE_LABELS.keys()),
+        "output_file":  str(_OUTPUT_FILE),
+        "distribution": counts.to_dict(),
+        "skipped":      True,
+    }
+
+
 def classify(
     model_name: str    = DEFAULT_MODEL,
     temperature: float = DEFAULT_TEMPERATURE,
     prior: str         = DEFAULT_PRIOR,
+    force: bool        = False,
 ) -> dict:
-    """Run zero-shot genre classification and write the parquet."""
+    """Run zero-shot genre classification and write the parquet.
+
+    If the output parquet already exists and ``force`` is False, the function
+    short-circuits without loading the embedding model — no 2 GB download.
+    """
+    if not force:
+        existing = _existing_distribution()
+        if existing is not None:
+            return existing
+
     ids, songs = _load_songs()
     slugs, label_vecs = _encode_labels(model_name, expected_dim=songs.shape[1])
 
@@ -281,5 +315,11 @@ if __name__ == "__main__":
                          ", ".join(TARGET_PRIORS) + ". Use 'none' to disable, or "
                          "an explicit list like 'rock=0.30,pop=0.25,...' "
                          "(default: %(default)s)."))
+    p.add_argument("--force", action="store_true",
+                   help="Regenerate even if the output parquet already exists "
+                        "(downloads the embedding model if not cached).")
     args = p.parse_args()
-    classify(model_name=args.model, temperature=args.temperature, prior=args.prior)
+    classify(
+        model_name=args.model, temperature=args.temperature,
+        prior=args.prior, force=args.force,
+    )

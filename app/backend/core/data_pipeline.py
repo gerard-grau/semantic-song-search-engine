@@ -1,10 +1,14 @@
 """
 Data-pipeline utilities — precompute artefacts that the API consumes.
 
-Two outputs:
+Three outputs:
 
-* ``embedded_songs_2d.parquet`` (cols: id_lyrics, x, y) — full-dataset
-  2D projection of every embedding. Generated with UMAP (default) or
+* ``embedded_songs_top5000.parquet`` — all per-field 1024-D embeddings
+  for the 5000 most-viewed songs (selected from ``top_5000_songs.csv``).
+  This is what the API reads at filter time: cosine similarity is
+  computed against these 5000 rows, never against the full 80k catalog.
+* ``embedded_songs_2d.parquet`` (cols: id_lyrics, x, y) — 2D projection
+  of those same 5000 embeddings. Generated with UMAP (default) or
   t-SNE. Optionally augmented with a per-song genre block so songs of
   the same genre cluster together in the 2-D layout.
 * ``songs_meta.parquet`` — a clean metadata snapshot for every song
@@ -40,6 +44,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
+import unicodedata
 from pathlib import Path
 
 import numpy as np
@@ -49,17 +55,170 @@ from sklearn.decomposition import PCA
 
 logger = logging.getLogger(__name__)
 
-_DATA_DIR    = Path(__file__).parent.parent / "data"
-_EMBED_FILE  = _DATA_DIR / "embedded_songs.parquet"
-_GENRES_FILE = _DATA_DIR / "embedded_songs_genres.parquet"
-_OUTPUT_2D   = _DATA_DIR / "embedded_songs_2d.parquet"
-_OUTPUT_META = _DATA_DIR / "songs_meta.parquet"
+_DATA_DIR      = Path(__file__).parent.parent / "data"
+_EMBED_FILE    = _DATA_DIR / "embedded_songs.parquet"
+_GENRES_FILE   = _DATA_DIR / "embedded_songs_genres.parquet"
+_TOP5000_CSV   = _DATA_DIR / "top_5000_songs.csv"
+_OUTPUT_TOP5K  = _DATA_DIR / "embedded_songs_top5000.parquet"
+_OUTPUT_2D     = _DATA_DIR / "embedded_songs_2d.parquet"
+_OUTPUT_META   = _DATA_DIR / "songs_meta.parquet"
+_AUGMENTED_CSV = _DATA_DIR / "augmented_songs.csv"
 
 # Default knobs for the augmented layout
 _DEFAULT_GENRE_MODE  = "soft"   # one of: soft, onehot, none
 _DEFAULT_ALPHA_GENRE = 2.0      # genre influence on squared distance is alpha²/(1+alpha²)
                                 # alpha=2 → 80% genre / 20% text. Lower softens
                                 # the cluster geometry but blurs genre separation.
+
+
+# ---------------------------------------------------------------------------
+# Top-5000 resolution + embeddings snapshot
+# ---------------------------------------------------------------------------
+
+def _norm_key(s) -> str:
+    """Lowercase, strip accents, collapse whitespace — for fuzzy title/artist match."""
+    if s is None:
+        return ""
+    text = str(s)
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = text.lower().strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _load_title_artist_index() -> dict[tuple[str, str], int]:
+    """Map ``(norm_title, norm_artist) → id_lyrics``.
+
+    Prefers ``songs_meta.parquet`` (clean UTF-8, fast). Falls back to the
+    raw ``augmented_songs.csv`` so the pipeline can still resolve ids the
+    first time it runs, before the metadata snapshot has been built.
+    """
+    if _OUTPUT_META.exists():
+        df = pq.read_table(_OUTPUT_META, columns=["id", "title", "artist"]).to_pandas()
+        df = df.rename(columns={"id": "id_lyrics"})
+    elif _AUGMENTED_CSV.exists():
+        df = pd.read_csv(
+            _AUGMENTED_CSV, encoding="latin-1",
+            usecols=["id_lyrics", "title", "artist"],
+            on_bad_lines="skip",
+        )
+    else:
+        raise FileNotFoundError(
+            f"Neither {_OUTPUT_META} nor {_AUGMENTED_CSV} exist — cannot "
+            "resolve top-5000 song ids."
+        )
+    df["id_lyrics"] = pd.to_numeric(df["id_lyrics"], errors="coerce")
+    df = df.dropna(subset=["id_lyrics"])
+    out: dict[tuple[str, str], int] = {}
+    for sid, title, artist in zip(df["id_lyrics"], df["title"], df["artist"]):
+        key = (_norm_key(title), _norm_key(artist))
+        # First occurrence wins — duplicate (title, artist) pairs are rare.
+        out.setdefault(key, int(sid))
+    return out
+
+
+def resolve_top5000_ids() -> list[int]:
+    """Read ``top_5000_songs.csv`` and return id_lyrics in popularity order.
+
+    Songs that can't be matched by (title, artist) — typo, alt spelling,
+    missing from catalog — are skipped with a warning. The returned list is
+    typically slightly under 5000 in practice.
+    """
+    if not _TOP5000_CSV.exists():
+        raise FileNotFoundError(
+            f"Top-5000 CSV not found at {_TOP5000_CSV}. "
+            "Generate it with `python -m etl.build_top_songs`."
+        )
+    top = pd.read_csv(_TOP5000_CSV, encoding="utf-8-sig", skipinitialspace=True)
+    top.columns = [c.strip().lstrip("#").strip() for c in top.columns]
+    if "song_title" not in top.columns or "artist" not in top.columns:
+        raise ValueError(
+            f"{_TOP5000_CSV} must have 'song_title' and 'artist' columns. "
+            f"Found: {list(top.columns)}"
+        )
+
+    index = _load_title_artist_index()
+    # Secondary index: (norm_title, first_norm_artist) — picks up multi-artist
+    # collaborations in the CSV ("Artist1, Artist2") that the catalog stores
+    # under just the lead artist.
+    first_artist_index: dict[tuple[str, str], int] = {}
+    for (t, a), sid in index.items():
+        first_artist_index.setdefault((t, a), sid)
+    ids: list[int] = []
+    seen: set[int] = set()
+    missing = 0
+    for title, artist in zip(top["song_title"], top["artist"]):
+        t_key = _norm_key(title)
+        a_key = _norm_key(artist)
+        sid = index.get((t_key, a_key))
+        if sid is None and "," in str(artist or ""):
+            first_artist = str(artist).split(",", 1)[0]
+            sid = first_artist_index.get((t_key, _norm_key(first_artist)))
+        if sid is None:
+            missing += 1
+            continue
+        if sid in seen:
+            continue
+        seen.add(sid)
+        ids.append(sid)
+    logger.info(
+        "Resolved %d / %d top-5000 songs to id_lyrics (%d unmatched).",
+        len(ids), len(top), missing,
+    )
+    return ids
+
+
+def run_top5000_embeddings(ids: list[int]) -> dict:
+    """Filter ``embedded_songs.parquet`` down to the top-5000 ids.
+
+    Streams the source parquet to avoid loading the full ~80k × 5-field
+    matrix into memory at once. The output preserves the popularity order
+    given by ``ids``.
+    """
+    if not _EMBED_FILE.exists():
+        raise FileNotFoundError(f"Embeddings parquet not found at {_EMBED_FILE}.")
+    if not ids:
+        raise ValueError("Empty id list — refusing to write an empty top-5000 parquet.")
+
+    wanted = {int(i) for i in ids}
+    pf = pq.ParquetFile(_EMBED_FILE)
+    chunks: list[pd.DataFrame] = []
+    seen: set[int] = set()
+    for batch in pf.iter_batches(batch_size=10_000):
+        df = batch.to_pandas()
+        df["id_lyrics"] = df["id_lyrics"].astype("int64")
+        sub = df[df["id_lyrics"].isin(wanted)]
+        if not sub.empty:
+            chunks.append(sub)
+            seen.update(sub["id_lyrics"].tolist())
+        if len(seen) == len(wanted):
+            break
+
+    if not chunks:
+        raise RuntimeError("No top-5000 ids matched any row in embedded_songs.parquet.")
+
+    out = pd.concat(chunks, ignore_index=True)
+    # Dedupe and reorder to match the popularity ranking in ``ids``. Some
+    # rows in embedded_songs.parquet share an id_lyrics (re-embeds, dupes);
+    # keep just the first occurrence so each visible song has exactly one row.
+    out = out.drop_duplicates(subset=["id_lyrics"], keep="first")
+    order = {sid: rank for rank, sid in enumerate(ids)}
+    out["_rank"] = out["id_lyrics"].map(order)
+    out = out.sort_values("_rank").drop(columns=["_rank"]).reset_index(drop=True)
+
+    _OUTPUT_TOP5K.parent.mkdir(parents=True, exist_ok=True)
+    if _OUTPUT_TOP5K.exists():
+        _OUTPUT_TOP5K.unlink()
+    out.to_parquet(_OUTPUT_TOP5K, index=False)
+    missing = len(wanted) - len(out)
+    if missing > 0:
+        logger.warning(
+            "%d / %d top-5000 ids were absent from %s — embedded_songs may be stale.",
+            missing, len(wanted), _EMBED_FILE.name,
+        )
+    logger.info("Wrote %d rows to %s", len(out), _OUTPUT_TOP5K)
+    return {"rows": len(out), "output_file": str(_OUTPUT_TOP5K)}
 
 
 # ---------------------------------------------------------------------------
@@ -77,18 +236,18 @@ def _embedding_to_array(val) -> np.ndarray:
     return np.asarray(val, dtype=np.float32)
 
 
-def _load_embeddings(limit: int | None) -> tuple[np.ndarray, np.ndarray]:
-    if not _EMBED_FILE.exists():
+def _load_embeddings() -> tuple[np.ndarray, np.ndarray]:
+    """Load lyrics embeddings for the top-5000 set (in popularity order)."""
+    source = _OUTPUT_TOP5K if _OUTPUT_TOP5K.exists() else _EMBED_FILE
+    if not source.exists():
         raise FileNotFoundError(
-            f"Embeddings parquet not found at {_EMBED_FILE}. "
-            "Generate it with the embedding pipeline before running this."
+            f"Embeddings parquet not found at {source}. "
+            "Run the embedding pipeline / top-5000 step before projecting."
         )
-    logger.info("Reading %s …", _EMBED_FILE)
-    df = pq.read_table(_EMBED_FILE, columns=["id_lyrics", "embedded_lyrics"]).to_pandas()
-    if limit is not None:
-        df = df.head(limit)
+    logger.info("Reading %s …", source)
+    df = pq.read_table(source, columns=["id_lyrics", "embedded_lyrics"]).to_pandas()
     if df.empty:
-        raise ValueError("Embeddings parquet is empty.")
+        raise ValueError(f"{source} is empty.")
     ids = df["id_lyrics"].astype("int64").to_numpy()
     matrix = np.vstack([_embedding_to_array(v) for v in df["embedded_lyrics"]])
     logger.info("Loaded %d embeddings of dim %d", matrix.shape[0], matrix.shape[1])
@@ -251,22 +410,18 @@ def _project_to_2d(
 
 
 def run_projection(
-    limit: int | None = None,
     method: str = "umap",
     pca_dim: int | None = 50,
     genre_mode: str = _DEFAULT_GENRE_MODE,
     alpha_genre: float = _DEFAULT_ALPHA_GENRE,
 ) -> dict:
-    """Project every embedding down to 2D and write the parquet.
+    """Project the top-5000 embeddings down to 2D and write the parquet.
 
     With ``genre_mode != 'none'`` and ``embedded_songs_genres.parquet``
     present, the projection is computed on augmented vectors so songs of
     the same genre cluster together. See module docstring for the math.
     """
-    if limit is not None and limit < 0:
-        limit = None
-
-    ids, matrix = _load_embeddings(limit)
+    ids, matrix = _load_embeddings()
     genre_block = _load_genre_block(ids, mode=genre_mode)
 
     # PCA only applies to methods that benefit from it (t-SNE and pca_umap).
@@ -369,7 +524,6 @@ def run_metadata_snapshot() -> dict:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="Generate API artefacts from embeddings.")
-    p.add_argument("--limit",  type=int, default=-1, help="Number of songs to project (-1 = all).")
     p.add_argument("--method", choices=["umap", "tsne", "pca_umap"], default="umap")
     p.add_argument("--pca-dim", type=int, default=50,
                    help="PCA pre-reduction for t-SNE / pca_umap (0 disables).")
@@ -382,14 +536,25 @@ if __name__ == "__main__":
                         "Set 0 to disable. (default: %(default)s)")
     p.add_argument("--skip-meta", action="store_true", help="Skip metadata snapshot.")
     p.add_argument("--only-meta", action="store_true", help="Only build the metadata snapshot.")
+    p.add_argument("--skip-top5000", action="store_true",
+                   help="Reuse existing embedded_songs_top5000.parquet without rebuilding it.")
     args = p.parse_args()
 
     pca_dim = None if args.pca_dim and args.pca_dim <= 0 else args.pca_dim
 
-    if not args.only_meta:
-        run_projection(
-            limit=args.limit, method=args.method, pca_dim=pca_dim,
-            genre_mode=args.genre_mode, alpha_genre=args.alpha_genre,
-        )
+    # Metadata snapshot first — needed by resolve_top5000_ids() for fast,
+    # clean (title, artist) → id_lyrics matching.
     if not args.skip_meta:
         run_metadata_snapshot()
+
+    if args.only_meta:
+        raise SystemExit(0)
+
+    if not args.skip_top5000:
+        top_ids = resolve_top5000_ids()
+        run_top5000_embeddings(top_ids)
+
+    run_projection(
+        method=args.method, pca_dim=pca_dim,
+        genre_mode=args.genre_mode, alpha_genre=args.alpha_genre,
+    )

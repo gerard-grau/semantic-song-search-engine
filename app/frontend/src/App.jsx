@@ -7,9 +7,16 @@ import FilterBar from './components/FilterBar'
 import TopResults from './components/TopResults'
 import SongDetail from './components/SongDetail'
 import Scatter2D from './components/visualizations/Scatter2D'
-import { fetchAllSongs, filterSongs, fetchNeighbors } from './api/client'
+import { fetchAllSongs, filterSongs, filterSimilarTo } from './api/client'
 import './App.css'
 
+// Chip shape:
+//   { kind: 'query',   value: string, label: string }
+//   { kind: 'similar', value: number (songId), label: string }
+//
+// Filters compose progressively: each chip narrows the current alive set,
+// regardless of kind. Removing a chip re-runs the remaining chips from
+// scratch so the result reflects the displayed constraints exactly.
 export default function App() {
   const { theme, toggleTheme } = useTheme()
 
@@ -20,12 +27,14 @@ export default function App() {
 
   // null = no filter applied (everything is active).
   const [activeIds, setActiveIds] = useState(null)
+  // Combined score per surviving song: arithmetic mean of its per-chip
+  // scores. Stored separately so we don't recompute on every render.
   const [scoreMap, setScoreMap] = useState({})
+  // One score map per chip, in chip order. Lets the right panel break
+  // the combined score back down into "boig: 0.81, amore: 0.74, …".
+  const [chipScoreMaps, setChipScoreMaps] = useState([])
 
   const [chips, setChips] = useState([])
-
-  const [similarToId, setSimilarToId] = useState(null)
-  const [similarToTitle, setSimilarToTitle] = useState(null)
 
   const [selectedSongId, setSelectedSongId] = useState(null)
   const [highlightedId, setHighlightedId] = useState(null)
@@ -34,6 +43,16 @@ export default function App() {
   const [message, setMessage] = useState(null)
 
   const aliveIdsRef = useRef(null)
+
+  // The most recent "similar" chip's song id becomes the visualization's
+  // focal (diamond) so the anchor of the current similarity filter stays
+  // visible while other filters compose.
+  const focalSimilarId = (() => {
+    for (let i = chips.length - 1; i >= 0; i--) {
+      if (chips[i].kind === 'similar') return chips[i].value
+    }
+    return null
+  })()
 
   const displaySongs = activeIds
     ? allSongs
@@ -51,9 +70,8 @@ export default function App() {
       setBaseProj2d(data.projections_2d)
       setActiveIds(null)
       setScoreMap({})
+      setChipScoreMaps([])
       setChips([])
-      setSimilarToId(null)
-      setSimilarToTitle(null)
       setMessage(null)
       aliveIdsRef.current = null
     } catch (err) {
@@ -69,59 +87,82 @@ export default function App() {
     setPage('main')
   }
 
-  async function handleAddChip(q) {
-    if (!q.trim()) return
-    setIsLoading(true)
-    setError(null)
-    setSimilarToId(null)
-    setSimilarToTitle(null)
-    try {
-      const data = await filterSongs(q, aliveIdsRef.current)
-      const newAliveIds = data.songs.map(s => s.id)
-      aliveIdsRef.current = newAliveIds
-      setActiveIds(new Set(newAliveIds))
-      const newScoreMap = {}
-      data.songs.forEach(s => { newScoreMap[s.id] = s.score ?? 0 })
-      setScoreMap(newScoreMap)
-      setChips(prev => [...prev, q])
-      setMessage(data.message)
-    } catch (err) {
-      setError('Error en la cerca.')
-      console.error(err)
-    } finally {
-      setIsLoading(false)
+  // Apply one chip on top of the current alive set; returns the API result.
+  async function applyChip(chip, aliveIds) {
+    if (chip.kind === 'similar') {
+      return filterSimilarTo(chip.value, aliveIds)
     }
+    return filterSongs(chip.value, aliveIds)
+  }
+
+  // Re-run an ordered list of chips from scratch (used on add and remove).
+  // Returns the final alive set + per-chip score maps so the right panel
+  // can display a combined score and a per-chip breakdown.
+  async function applyChipsFromScratch(orderedChips) {
+    let alive = null
+    const perChipMaps = []
+    let lastMessage = null
+    for (const chip of orderedChips) {
+      const data = await applyChip(chip, alive)
+      const map = {}
+      data.songs.forEach(s => { map[s.id] = s.score ?? 0 })
+      perChipMaps.push(map)
+      alive = data.songs.map(s => s.id)
+      lastMessage = data.message ?? null
+    }
+    return { alive, perChipMaps, lastMessage }
+  }
+
+  async function handleAddChip(text) {
+    const q = (text || '').trim()
+    if (!q) return
+    await runChipUpdate([...chips, { kind: 'query', value: q, label: q }])
+  }
+
+  async function handleAddSimilarChip(songId, title) {
+    if (songId == null) return
+    const label = title ? `similars a "${title}"` : `similars a #${songId}`
+    // Replace existing similar chip if it points to the same song.
+    const filtered = chips.filter(c => !(c.kind === 'similar' && c.value === songId))
+    await runChipUpdate([...filtered, { kind: 'similar', value: songId, label }])
   }
 
   async function handleRemoveChip(index) {
     const newChips = chips.filter((_, i) => i !== index)
-    setChips(newChips)
-
     if (newChips.length === 0) {
+      setChips([])
       setActiveIds(null)
       setScoreMap({})
+      setChipScoreMaps([])
       aliveIdsRef.current = null
       setMessage(null)
       return
     }
+    await runChipUpdate(newChips)
+  }
 
+  async function runChipUpdate(newChips) {
     setIsLoading(true)
     setError(null)
     try {
-      let currentAlive = null
-      let lastData = null
-      for (const chip of newChips) {
-        lastData = await filterSongs(chip, currentAlive)
-        currentAlive = lastData.songs.map(s => s.id)
+      const { alive, perChipMaps, lastMessage } = await applyChipsFromScratch(newChips)
+      aliveIdsRef.current = alive
+      setActiveIds(new Set(alive))
+      // Combined score = arithmetic mean of per-chip scores.
+      // Survivors made it through every chip, so each id is keyed in
+      // every map — no missing-entry handling needed.
+      const combined = {}
+      for (const id of alive) {
+        let sum = 0
+        for (const m of perChipMaps) sum += (m[id] ?? 0)
+        combined[id] = perChipMaps.length ? sum / perChipMaps.length : 0
       }
-      aliveIdsRef.current = currentAlive
-      setActiveIds(new Set(currentAlive))
-      const newScoreMap = {}
-      lastData.songs.forEach(s => { newScoreMap[s.id] = s.score ?? 0 })
-      setScoreMap(newScoreMap)
-      setMessage(lastData.message)
+      setScoreMap(combined)
+      setChipScoreMaps(perChipMaps)
+      setChips(newChips)
+      setMessage(lastMessage)
     } catch (err) {
-      setError('Error actualitzant filtres.')
+      setError('Error aplicant filtres.')
       console.error(err)
     } finally {
       setIsLoading(false)
@@ -131,57 +172,10 @@ export default function App() {
   function handleReset() {
     setActiveIds(null)
     setScoreMap({})
+    setChipScoreMaps([])
     setChips([])
-    setSimilarToId(null)
-    setSimilarToTitle(null)
     setMessage(null)
     aliveIdsRef.current = null
-  }
-
-  async function handleSongExplore(songId) {
-    setIsLoading(true)
-    setError(null)
-    setMessage(null)
-
-    const song = allSongs.find(s => s.id === songId)
-    setSimilarToId(songId)
-    setSimilarToTitle(song?.title ?? null)
-
-    try {
-      const data = await fetchNeighbors(songId, { n: 20 })
-      let neighborIds = new Set(data.songs.map(s => s.id))
-      neighborIds.add(songId)
-
-      const chipAlive = aliveIdsRef.current
-      if (chipAlive) {
-        const chipSet = new Set(chipAlive)
-        neighborIds = new Set([...neighborIds].filter(id => chipSet.has(id)))
-        neighborIds.add(songId)
-      }
-
-      setActiveIds(neighborIds)
-
-      const newScoreMap = {}
-      data.songs.forEach(s => { newScoreMap[s.id] = s.score ?? 0 })
-      newScoreMap[songId] = 1
-      setScoreMap(newScoreMap)
-    } catch (err) {
-      setError('Error carregant cançons similars.')
-      console.error(err)
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  function handleExitSimilar() {
-    setSimilarToId(null)
-    setSimilarToTitle(null)
-    if (chips.length > 0 && aliveIdsRef.current) {
-      setActiveIds(new Set(aliveIdsRef.current))
-    } else {
-      setActiveIds(null)
-      setScoreMap({})
-    }
   }
 
   function handleOpenDetail(songId) {
@@ -241,7 +235,9 @@ export default function App() {
           <TopResults
             songs={displaySongs}
             message={message}
-            query={chips.length > 0 ? chips[chips.length - 1] : ''}
+            query={chips.length > 0 ? chips[chips.length - 1].label : ''}
+            chips={chips}
+            chipScoreMaps={chipScoreMaps}
             onSongHover={setHighlightedId}
             onSongClick={handleOpenDetail}
             highlightedId={highlightedId}
@@ -261,9 +257,7 @@ export default function App() {
 
           <div className="viz-bar viz-bar--controls">
             <span className="viz-count">
-              {similarToId ? (
-                <><strong>{activeCount}</strong> cançons similars</>
-              ) : activeIds ? (
+              {activeIds ? (
                 <><strong>{activeCount}</strong> / {allSongs.length} cançons</>
               ) : (
                 <><strong>{allSongs.length}</strong> cançons al mapa</>
@@ -271,26 +265,15 @@ export default function App() {
             </span>
           </div>
 
-          {similarToId && (
-            <div className="viz-bar viz-bar--explore">
-              <button className="explore-back-btn" onClick={handleExitSimilar}>← Enrere</button>
-              <span className="explore-label">
-                Similars a: <strong>{similarToTitle}</strong>
-              </span>
-              <span className="explore-hint">Clica una altra cançó per explorar-ne les similars</span>
-            </div>
-          )}
-
           <div className="viz-area">
             <Scatter2D
               points={baseProj2d}
               activeIds={activeIds}
-              scoreMap={scoreMap}
-              focalId={similarToId}
+              focalId={focalSimilarId}
               highlightedId={highlightedId}
               onPointHover={setHighlightedId}
-              onPointClick={handleSongExplore}
-              onPointDoubleClick={handleOpenDetail}
+              onPointSearchSimilar={handleAddSimilarChip}
+              onPointOpenDetail={handleOpenDetail}
             />
           </div>
         </section>

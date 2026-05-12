@@ -47,7 +47,8 @@ class AllSongsResponse(BaseModel):
 
 
 class FilterRequest(BaseModel):
-    query: str
+    query: str = ""
+    similar_to_id: int | None = None    # if set, similarity-to-song filter; query is ignored
     song_ids: list[int] | None = None   # None → start from all songs
 
 
