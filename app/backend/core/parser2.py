@@ -128,10 +128,12 @@ SOFTMAX_T        = 0.10
 # hundred ≤ 1% candidates. We keep at most KEEP_TOP_N candidates plus
 # anything ≥ PROB_FLOOR regardless of rank, then renormalise. The
 # survivors form a clean distribution where every entry is either
-# (a) genuinely competitive (≥ 0.20) or (b) one of the top 3 best
-# guesses (so an ambiguous OOV like 'bog' still surfaces 3 plausible
-# corrections instead of degenerating into noise).
-KEEP_TOP_N       = 3
+# (a) genuinely competitive (≥ 0.20) or (b) one of the top KEEP_TOP_N
+# best guesses — wide enough that a domain-correct candidate ranked
+# low by wordfreq alone (e.g. 'boig' for input 'bog', crowded out by
+# common short words like 'bo'/'bon') still survives into downstream
+# scoring and reconstruction.
+KEEP_TOP_N       = 5
 PROB_FLOOR       = 0.20
 
 # Floor on the input word's *raw* probability (i.e. before softmax /
@@ -300,6 +302,18 @@ def tokenize(text: str) -> list[str]:
     """Split a normalised string into word tokens (≥ 2 chars)."""
     text = _CONTRACTION_RE.sub(r'\1 ', text)
     return [t for t in _TOKEN_RE.findall(text) if len(t) >= 2]
+
+
+def split_words(text: str) -> list[str]:
+    """Same split as :func:`tokenize` but keeps single-char words.
+
+    Used by callers that need a 1:1 correspondence with input positions —
+    e.g. cercador's reconstruction beam, which must preserve filler like
+    the Catalan conjunction "i" so reconstructions can exact-match phrase
+    index keys that include it.
+    """
+    text = _CONTRACTION_RE.sub(r'\1 ', text)
+    return _TOKEN_RE.findall(text)
 
 
 # ---------------------------------------------------------------------------

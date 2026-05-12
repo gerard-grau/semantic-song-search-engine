@@ -38,6 +38,7 @@ from app.backend.core.parser2 import (
     distance_to_prob,
     edit_distance,
     normalize,
+    split_words,
     tokenize,
 )
 
@@ -178,7 +179,7 @@ class CercadorIndex:
     # match on the whole field gets an additive boost on top.
     W_SONG_TITLE   = 1.6
     W_SONG_ARTIST  = 1.3
-    W_SONG_LYRICS  = 0.4
+    W_SONG_LYRICS  = 0.8
     W_GRUP_NAME    = 1.6
     W_NOTI_TITLE   = 1.6
     W_NOTI_SNIPPET = 0.4
@@ -191,7 +192,7 @@ class CercadorIndex:
     # apply the same EXACT_PHRASE_BOOST to any exact match. Catches
     # "bog per tu" → "boig per tu" hitting the song title, which the
     # literal-q_norm boost misses entirely.
-    RECONSTRUCT_TOP_PER_WORD   = 3     # per-word fan-out into the beam
+    RECONSTRUCT_TOP_PER_WORD   = 5     # per-word fan-out into the beam
     RECONSTRUCT_BEAM_K         = 32    # max sentences kept per beam step
     RECONSTRUCT_MIN_JOINT_PROB = 0.05  # drop reconstructions below this
 
@@ -444,6 +445,15 @@ class CercadorIndex:
         distributions so a query like "bog per tu" yields
         ("boig per tu", 0.85), ("bog per tu", 0.10), ...
 
+        Positions are aligned with split_words(q_norm), which keeps
+        single-char words like the Catalan conjunction "i" that
+        tokenize() filters out. Those short positions are pinned to a
+        {word: 1.0} singleton (Parser2 doesn't score them) so the
+        reconstruction preserves them verbatim — without this, the
+        phrase key "com el dia i la nit" can never be exact-matched
+        from a query like "comel dia i lanit", where "i" would
+        otherwise be dropped before the beam ever ran.
+
         The beam holds (phrase, log_prob) so joint = product of per-word
         probs stays numerically stable on long queries. Width is
         RECONSTRUCT_BEAM_K — that's the budget on full sentences we'll
@@ -458,13 +468,21 @@ class CercadorIndex:
         parser normalises at parse time), so callers can use them as
         keys into the *_phrase indices directly.
         """
-        per_word = self.parser.parse_per_word(query)
-        if not per_word:
+        all_words = split_words(normalize(query))
+        if not all_words:
             return []
+        # split_words preserves single-char positions; parse_per_word
+        # only produces distributions for ≥2-char tokens, so zip them
+        # together with a fixed singleton at every short position.
+        per_word = iter(self.parser.parse_per_word(query))
+        distributions: list[dict[str, float]] = [
+            next(per_word) if len(w) >= 2 else {w: 1.0}
+            for w in all_words
+        ]
         # Beam: list of (phrase, log_prob). Seed with the empty prefix
         # at log_prob = 0, then expand one word position at a time.
         beam: list[tuple[str, float]] = [("", 0.0)]
-        for dist in per_word:
+        for dist in distributions:
             top_alts = sorted(dist.items(), key=lambda kv: -kv[1])[
                 : self.RECONSTRUCT_TOP_PER_WORD
             ]
