@@ -1004,9 +1004,41 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
   font-size: var(--t-xs);
   color: var(--ink);
   font-weight: 500;
+  border: 1px solid transparent;
+}
+
+/* Clickable variants — same swatch, but signal "this is a filter button". */
+.legend-item--clickable {
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease),
+              border-color var(--t-fast) var(--ease),
+              color var(--t-fast) var(--ease),
+              transform 80ms var(--ease);
+  /* Override default <button> resets while keeping the pill silhouette. */
+  font: inherit;
+  letter-spacing: inherit;
+}
+.legend-item--clickable:hover {
+  background: var(--surface-2);
+  border-color: var(--legend-color);
+}
+.legend-item--clickable:active { transform: scale(0.97); }
+
+.legend-item--active {
+  /* Inline ``background: var(--legend-color)`` is applied in JSX so the
+     active genre wears its own colour; only the text contrast lives here. */
+  color: #0e1116;
+  border-color: transparent;
+  font-weight: 700;
+}
+.legend-item--active .legend-dot {
+  background: rgba(14, 17, 22, 0.45) !important;
 }
 
 .legend-dot {
@@ -1014,6 +1046,7 @@
   height: 10px;
   border-radius: 50%;
   display: inline-block;
+  flex-shrink: 0;
 }
 
 .legend-hint {
@@ -1096,12 +1129,40 @@
   background: var(--brand);
   color: var(--brand-ink);
 }
+/* Genre chips wear their own genre colour (inline style sets background +
+   ink); the class is kept for future genre-only tweaks and to make selectors
+   like ``.filter-chip--genre + …`` available. */
+.filter-chip--genre {
+  font-weight: 700;
+}
+/* Multi-genre chip stays on the default dark chip background; the colours
+   live in the dot row prefixed to the label instead of in the fill. */
+.filter-chip--genre-multi {
+  /* explicit reset in case any prior single-genre inline style is overridden
+     by hydration order */
+  background: var(--ink);
+  color: var(--bg);
+}
+.filter-chip-genre-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+}
+.filter-chip-genre-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
 .filter-chip-icon {
   font-weight: 700;
   font-size: 0.95em;
   margin-right: 1px;
   opacity: 0.85;
 }
+
 
 .filter-input {
   flex: 1;

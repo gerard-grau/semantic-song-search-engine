@@ -12,6 +12,13 @@ import { genreColor, GENRE_COLORS } from './genreColors'
 export default function Scatter2D({
   points, activeIds, focalId,
   highlightedId, onPointHover, onPointSearchSimilar, onPointOpenDetail,
+  // Legend doubles as the genre filter: clicking an item toggles a genre
+  // chip in the parent's chip list. ``activeGenres`` is the list of slugs
+  // currently in the genre chip (length 0 if no genre filter is active);
+  // a legend item is highlighted iff its slug is in that list. Plain click
+  // calls ``onAddGenreChip(slug, false)`` for single-select replace; ctrl-
+  // or ⌘-click calls it with ``true`` to toggle the slug additively.
+  onAddGenreChip, activeGenres = [],
 }) {
   const canvasRef = useRef(null)
   const containerRef = useRef(null)
@@ -405,16 +412,38 @@ export default function Scatter2D({
           </div>
         </div>
       )}
-      <div className="viz-legend">
-        {Object.entries(GENRE_COLORS).map(([g, c]) => (
-          <span key={g} className="legend-item">
-            <span className="legend-dot" style={{ background: c }} />
-            {g}
-          </span>
-        ))}
-        <span className="legend-item legend-hint">
-          clic = opcions
-        </span>
+      <div className="viz-legend" role="group" aria-label="Filtra per gènere (Ctrl/⌘-clic per a múltiples)">
+        {Object.entries(GENRE_COLORS).map(([g, c]) => {
+          const isActive = activeGenres.includes(g)
+          // No callback ⇒ the legend stays a passive swatch row (back-compat
+          // for any future caller that doesn't wire up filtering).
+          const clickable = typeof onAddGenreChip === 'function'
+          const className = 'legend-item'
+            + (clickable ? ' legend-item--clickable' : '')
+            + (isActive  ? ' legend-item--active'    : '')
+          const style = { '--legend-color': c, ...(isActive ? { background: c } : null) }
+          return clickable
+            ? (
+              <button
+                key={g}
+                type="button"
+                className={className}
+                style={style}
+                onClick={(e) => onAddGenreChip(g, e.ctrlKey || e.metaKey)}
+                aria-pressed={isActive}
+                title="Ctrl/⌘-clic per afegir-ne més d'un"
+              >
+                <span className="legend-dot" style={{ background: c }} />
+                {g}
+              </button>
+            )
+            : (
+              <span key={g} className={className} style={style}>
+                <span className="legend-dot" style={{ background: c }} />
+                {g}
+              </span>
+            )
+        })}
       </div>
     </div>
   )

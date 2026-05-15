@@ -11,12 +11,18 @@ import { fetchAllSongs, filterSongs, filterSimilarTo } from './api/client'
 import './App.css'
 
 // Chip shape:
-//   { kind: 'query',   value: string, label: string }
+//   { kind: 'query',   value: string,         label: string }
 //   { kind: 'similar', value: number (songId), label: string }
+//   { kind: 'genre',   value: string[] (slugs), label: string }
 //
 // Filters compose progressively: each chip narrows the current alive set,
 // regardless of kind. Removing a chip re-runs the remaining chips from
 // scratch so the result reflects the displayed constraints exactly.
+// Genre chips are evaluated locally (every song already carries its genre
+// from /api/songs) so they don't need a round-trip to the backend. Their
+// value is a list of slugs UNION'd together (a song matches if its genre
+// is in the list) — multiple slugs in one chip is the only sensible
+// composition since AND'ing distinct genres always intersects to ∅.
 export default function App() {
   const { theme, toggleTheme } = useTheme()
 
@@ -87,10 +93,25 @@ export default function App() {
     setPage('main')
   }
 
-  // Apply one chip on top of the current alive set; returns the API result.
+  // Apply one chip on top of the current alive set; returns a FilterResponse-
+  // shaped object. Genre chips are pure metadata filters and run locally
+  // (every song dict already has a `genre` field from /api/songs); the other
+  // kinds round-trip to the backend.
   async function applyChip(chip, aliveIds) {
     if (chip.kind === 'similar') {
       return filterSimilarTo(chip.value, aliveIds)
+    }
+    if (chip.kind === 'genre') {
+      const aliveSet = aliveIds == null ? null : new Set(aliveIds)
+      // Tolerate the legacy ``value: string`` shape just in case a stale chip
+      // is in flight while this lands; new chips always carry ``string[]``.
+      const wanted = new Set(Array.isArray(chip.value) ? chip.value : [chip.value])
+      const survivors = allSongs
+        .filter(s => (aliveSet == null || aliveSet.has(s.id)) && wanted.has(s.genre))
+        // Score 1.0 for every survivor — a genre chip is a hard yes/no
+        // filter, so it doesn't add ranking signal beyond "in the bucket".
+        .map(s => ({ ...s, score: 1 }))
+      return { songs: survivors, projections_2d: [], total_remaining: survivors.length, message: null }
     }
     return filterSongs(chip.value, aliveIds)
   }
@@ -127,6 +148,45 @@ export default function App() {
     await runChipUpdate([...filtered, { kind: 'similar', value: songId, label }])
   }
 
+  // Build the visible label for a genre chip from its current slug list.
+  function genreChipLabel(values) {
+    return values.join(' + ')
+  }
+
+  // Plain click  ⇒ replace the genre filter with just this slug; if it was
+  //                 already the single active slug, toggle the chip off.
+  // Ctrl/⌘-click ⇒ toggle this slug in the existing set; if the set becomes
+  //                 empty after the toggle, remove the chip entirely.
+  async function handleAddGenreChip(slug, additive = false) {
+    if (!slug) return
+    const existingIdx = chips.findIndex(c => c.kind === 'genre')
+    const current = existingIdx === -1
+      ? []
+      : (Array.isArray(chips[existingIdx].value)
+          ? chips[existingIdx].value
+          : [chips[existingIdx].value])
+
+    let nextValues
+    if (additive) {
+      nextValues = current.includes(slug)
+        ? current.filter(g => g !== slug)
+        : [...current, slug]
+    } else {
+      nextValues = current.length === 1 && current[0] === slug ? [] : [slug]
+    }
+
+    if (nextValues.length === 0) {
+      if (existingIdx !== -1) await handleRemoveChip(existingIdx)
+      return
+    }
+
+    const newChip = { kind: 'genre', value: nextValues, label: genreChipLabel(nextValues) }
+    const newChips = existingIdx === -1
+      ? [...chips, newChip]
+      : chips.map((c, i) => (i === existingIdx ? newChip : c))
+    await runChipUpdate(newChips)
+  }
+
   async function handleRemoveChip(index) {
     const newChips = chips.filter((_, i) => i !== index)
     if (newChips.length === 0) {
@@ -148,14 +208,20 @@ export default function App() {
       const { alive, perChipMaps, lastMessage } = await applyChipsFromScratch(newChips)
       aliveIdsRef.current = alive
       setActiveIds(new Set(alive))
-      // Combined score = arithmetic mean of per-chip scores.
-      // Survivors made it through every chip, so each id is keyed in
-      // every map — no missing-entry handling needed.
+      // Combined score = mean of per-chip scores from RANKING chips only.
+      // Genre chips are binary metadata filters (score=1 for every survivor)
+      // so including them would pull every score toward 1 and flatten the
+      // ranking. If all chips are genre, fall back to 1.0 so survivors keep
+      // a consistent (uniform) score.
       const combined = {}
+      const rankingIdx = newChips
+        .map((c, i) => (c.kind === 'genre' ? -1 : i))
+        .filter(i => i >= 0)
       for (const id of alive) {
+        if (rankingIdx.length === 0) { combined[id] = 1; continue }
         let sum = 0
-        for (const m of perChipMaps) sum += (m[id] ?? 0)
-        combined[id] = perChipMaps.length ? sum / perChipMaps.length : 0
+        for (const i of rankingIdx) sum += (perChipMaps[i][id] ?? 0)
+        combined[id] = sum / rankingIdx.length
       }
       setScoreMap(combined)
       setChipScoreMaps(perChipMaps)
@@ -274,6 +340,14 @@ export default function App() {
               onPointHover={setHighlightedId}
               onPointSearchSimilar={handleAddSimilarChip}
               onPointOpenDetail={handleOpenDetail}
+              onAddGenreChip={handleAddGenreChip}
+              activeGenres={
+                (() => {
+                  const v = chips.find(c => c.kind === 'genre')?.value
+                  if (v == null) return []
+                  return Array.isArray(v) ? v : [v]
+                })()
+              }
             />
           </div>
         </section>
