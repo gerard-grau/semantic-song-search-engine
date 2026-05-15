@@ -42,12 +42,14 @@ logger = logging.getLogger(__name__)
 # song can earn on top of its [0, 1]-normalised text score.
 GENRE_WEIGHT = 0.15
 
-# Percentile cut-offs applied to normalised scores. The query filter is
-# tighter because text queries already carry strong intent; similarity
-# chips are broad on purpose — clicking a song should pull in many cousins
+# Percentile cut-offs applied to normalised scores. The query filter keeps
+# only the top ~10% so the visualization actually feels selective — at 70
+# (top 30%) ~1300 songs survived the first chip and the dim/highlight on
+# the scatter looked indistinguishable from "everything active". Similarity
+# chips stay broad on purpose — clicking a song should pull in many cousins
 # so that stacking 3-4 chips intersects to a meaningful "similar to all of
 # these" set instead of one or two near-duplicates.
-QUERY_PERCENTILE = 70.0
+QUERY_PERCENTILE = 90.0
 SIMILAR_PERCENTILE = 50.0
 
 # Field rows used when combining per-field cosines for song-to-song
