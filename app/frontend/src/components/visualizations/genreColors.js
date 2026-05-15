@@ -1,12 +1,17 @@
+// 11-label taxonomy — keep in sync with etl/build_artist_genres.py::GENRES.
+// Hue spacing chosen so adjacent buckets stay distinguishable in the scatter.
 export const GENRE_COLORS = {
-  pop:           '#FF6B6B',
-  rock:          '#00BFA5',
-  folk:          '#4FC3F7',
-  electronica:   '#AB47BC',
-  'hip-hop':     '#FFB74D',
-  rumba:         '#FF8A65',
-  'cançó-autor': '#81C784',
-  punk:          '#E57373',
+  pop:         '#FF6B6B', // coral red
+  rock:        '#00BFA5', // teal
+  indie:       '#7E57C2', // violet
+  folk:        '#4FC3F7', // sky blue
+  rumba:       '#FF8A65', // warm orange
+  ska:         '#FFD54F', // amber yellow
+  punk:        '#E53935', // crimson
+  'hip-hop':   '#FFB74D', // mango
+  electronica: '#AB47BC', // magenta
+  havaneres:   '#26A69A', // sea green
+  infantil:    '#81C784', // mint green
 }
 
 export const DEFAULT_COLOR = '#888'
