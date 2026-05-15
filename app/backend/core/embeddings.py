@@ -330,6 +330,101 @@ def filter_by_similarity_fast(
     return survivors
 
 
+def compute_cercador_suggestions(
+    query_text: str,
+    index: dict,
+    exclude_ids: set[int] | None = None,
+    suggestions_k: int = 4,
+    lyrics_extra_k: int = 2,
+    qualitative_field_idx: int = 1,
+) -> dict:
+    """Embedding-based "Sugerències" + extra lyrics for the cercador.
+
+    One query encoding is reused for both passes:
+
+    * **suggestions** — top ``suggestions_k`` songs ranked by raw cosine
+      against the qualitative-description field (row 1 of the dense
+      index). The intent is "the user described a vibe; surface songs
+      whose qualitative blurb matches that vibe", so we deliberately do
+      NOT max over fields here — title/artist matches are already covered
+      by the keyword cercador.
+    * **lyrics_extra** — top ``lyrics_extra_k`` songs ranked by
+      max-over-fields cosine, with ``exclude_ids`` masked out. These
+      get appended to the keyword-cercador's lyrics column so the user
+      sees embedding-discovered matches the keyword index missed.
+
+    Returns ``(row_idx, raw_cosine)`` pairs in ``suggestions`` /
+    ``lyrics_extra`` keys; row indices point into ``index["songs"]``.
+    Empty lists on encoder failure or empty matrix.
+    """
+    matrix = index["matrix"]   # (N, F, D), L2-normalised
+    valid  = index["valid"]    # (N, F)
+    if matrix.size == 0:
+        return {"suggestions": [], "lyrics_extra": []}
+
+    N, F, D = matrix.shape
+    if F == 0 or D == 0:
+        return {"suggestions": [], "lyrics_extra": []}
+
+    try:
+        q = np.asarray(encode_query(query_text), dtype=np.float32)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Suggestions: encoder unavailable (%s)", exc)
+        return {"suggestions": [], "lyrics_extra": []}
+
+    q_norm = float(np.linalg.norm(q))
+    if q_norm < 1e-12:
+        return {"suggestions": [], "lyrics_extra": []}
+    q = q / q_norm
+
+    # ── Suggestions: cosine vs qualitative-description field only ────
+    suggestions: list[tuple[int, float]] = []
+    if 0 <= qualitative_field_idx < F:
+        qual_vecs = matrix[:, qualitative_field_idx, :]   # (N, D)
+        qual_valid = valid[:, qualitative_field_idx]       # (N,)
+        qual_sims = qual_vecs @ q                          # (N,)
+        masked = np.where(qual_valid, qual_sims, -np.inf)
+
+        valid_n = int(qual_valid.sum())
+        k = min(suggestions_k, valid_n)
+        if k > 0:
+            top = np.argpartition(-masked, k - 1)[:k]
+            top = top[np.argsort(-masked[top])]
+            suggestions = [
+                (int(i), float(masked[i]))
+                for i in top
+                if np.isfinite(masked[i])
+            ]
+
+    # ── Lyrics extra: max over fields, exclude_ids masked out ────────
+    # One stacked matmul against the full (N, F, D) cube. Mask invalid
+    # field cells with -inf so they can't win the max; mask excluded ids
+    # with -inf so they're dropped from the top-K.
+    field_sims = (matrix.reshape(N * F, D) @ q).reshape(N, F)
+    field_sims = np.where(valid, field_sims, -np.inf)
+    max_sims = field_sims.max(axis=1)                       # (N,)
+
+    if exclude_ids:
+        id_to_idx = index["id_to_idx"]
+        excluded_pos = [id_to_idx[i] for i in exclude_ids if i in id_to_idx]
+        if excluded_pos:
+            max_sims[excluded_pos] = -np.inf
+
+    lyrics_extra: list[tuple[int, float]] = []
+    finite_n = int(np.isfinite(max_sims).sum())
+    k2 = min(lyrics_extra_k, finite_n)
+    if k2 > 0:
+        top2 = np.argpartition(-max_sims, k2 - 1)[:k2]
+        top2 = top2[np.argsort(-max_sims[top2])]
+        lyrics_extra = [
+            (int(i), float(max_sims[i]))
+            for i in top2
+            if np.isfinite(max_sims[i])
+        ]
+
+    return {"suggestions": suggestions, "lyrics_extra": lyrics_extra}
+
+
 def _word_overlap_filter_fast(
     query_text: str,
     sub_idx: np.ndarray,

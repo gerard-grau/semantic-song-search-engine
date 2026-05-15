@@ -1783,18 +1783,19 @@
 
 .cercador-results { display: flex; flex-direction: column; }
 .cercador-results--two-col { flex-direction: row; }
-.cercador-results--two-col > .cercador-section--grups {
+.cercador-results--two-col > .cercador-left-col {
   width: 38%;
   flex-shrink: 0;
   border-right: 1px solid var(--line);
-  border-bottom: none;
 }
 .cercador-results--two-col > .cercador-right-col {
   flex: 1;
   min-width: 0;
 }
 
+.cercador-left-col,
 .cercador-right-col { display: flex; flex-direction: column; }
+.cercador-left-col .cercador-section:last-child { border-bottom: none; }
 
 .cercador-section {
   padding: 14px 0 8px;
@@ -1929,6 +1930,69 @@
 }
 .cercador-more:hover { color: var(--brand); }
 
+/* Sugerències section — embedding-based semantic matches. The accent
+   border on the section + the diamond ◈ badge mark these as "AI" picks
+   to distinguish them from the deterministic keyword hits above. */
+.cercador-section--suggestions {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--brand) 4%, transparent),
+    transparent 90%
+  );
+}
+
+.cercador-item--embedding,
+.cercador-item--suggestion {
+  position: relative;
+}
+.cercador-item--embedding::before,
+.cercador-item--suggestion::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 11px;
+  bottom: 11px;
+  width: 2px;
+  background: color-mix(in srgb, var(--brand) 60%, transparent);
+  border-radius: 1px;
+}
+
+.cercador-match-badge {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  padding: 1px 6px 1px 5px;
+  border-radius: var(--r-pill);
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.cercador-loading--inline {
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink-mute);
+  font-size: var(--t-sm);
+  font-style: italic;
+}
+
+.cercador-loading-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: cercador-pulse 1.1s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes cercador-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+
 /* highlight */
 .cerca-highlight {
   background: var(--selection);
@@ -1964,7 +2028,7 @@
 
 @media (max-width: 600px) {
   .cercador-results--two-col { flex-direction: column; }
-  .cercador-results--two-col > .cercador-section--grups {
+  .cercador-results--two-col > .cercador-left-col {
     width: 100%;
     border-right: none;
     border-bottom: 1px solid var(--line);

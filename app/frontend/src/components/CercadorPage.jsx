@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import ThemeToggle from './ThemeToggle'
 import SongDetail from './SongDetail'
-import { cercadorSearch } from '../api/client'
+import { cercadorSearch, cercadorSuggestions } from '../api/client'
 import { GENRE_COLORS } from './visualizations/genreColors'
 
 /**
@@ -19,17 +19,56 @@ function highlightText(text, terms) {
   )
 }
 
+// Trigger gate for the embedding-based suggestion call. The keystroke
+// stream feeds two pipelines: the cheap keyword search (150ms debounce
+// per keystroke) and the slow embedding search. We don't want to encode
+// a 1024-dim BGE-M3 vector on every keystroke — that's the bug the user
+// described. Instead we fire only when the user has produced a complete
+// new "thought":
+//   1. a space immediately after a non-space character (finished a word),
+//   2. OR 2s of typing inactivity (assume the prompt is done).
+// Multiple consecutive spaces, or repeat firings for the same query
+// (deduped against `lastTriggeredRef`), no-op.
+const SUGGESTION_IDLE_MS = 2000
+
+function normalizeForTrigger(s) {
+  return s.trim().replace(/\s+/g, ' ')
+}
+
 export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobreix }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState(null)
   const [isSearching, setIsSearching] = useState(false)
   const [selectedSongId, setSelectedSongId] = useState(null)
+
+  // Embedding-suggestion pipeline state. `suggestions` is null until the
+  // first trigger fires for this query — we use the null marker to hide
+  // the Sugerències section before any embedding call has been made.
+  const [suggestions, setSuggestions] = useState(null)
+  const [lyricsExtra, setLyricsExtra] = useState([])
+  const [isSuggesting, setIsSuggesting] = useState(false)
+
   const debounceRef = useRef(null)
   const inputRef = useRef(null)
+  const inactivityRef = useRef(null)
+  // Last normalised query we sent to /cercador/suggestions. Used to
+  // dedupe: "a b" triggered, "a b " typed → same normalised → skip.
+  const lastTriggeredRef = useRef('')
+  // Latest input value, mirrored to a ref so the 2s idle callback fires
+  // against the current value rather than the closure-captured one.
+  const latestQueryRef = useRef('')
+  // Latest /cercador response, mirrored so the embedding call can pass
+  // the keyword-cancons ids as exclude_ids without re-creating callbacks.
+  const latestResultsRef = useRef(null)
+  // Bumped on every suggestion fire so a stale slow response can't
+  // overwrite a newer fast one.
+  const suggestReqRef = useRef(0)
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  useEffect(() => { latestResultsRef.current = results }, [results])
 
   // Cmd/Ctrl + K shortcut
   useEffect(() => {
@@ -40,8 +79,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
         inputRef.current?.select()
       } else if (e.key === 'Escape' && document.activeElement === inputRef.current) {
         if (query) {
-          setQuery('')
-          setResults(null)
+          handleClear()
         }
       }
     }
@@ -65,32 +103,126 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     }
   }, [])
 
+  const doSuggestionSearch = useCallback(async (q) => {
+    if (!q) return
+    const reqId = ++suggestReqRef.current
+    // Reset suggestions to null so the section renders "generant
+    // sugerències" while we wait; lyrics_extra is also cleared so the
+    // Lletres column doesn't show stale embedding picks under a new query.
+    setIsSuggesting(true)
+    setSuggestions(null)
+    setLyricsExtra([])
+    try {
+      const excludeIds = (latestResultsRef.current?.cancons || []).map(c => c.id)
+      const data = await cercadorSuggestions(q, excludeIds)
+      if (reqId !== suggestReqRef.current) return
+      setSuggestions(data.suggestions || [])
+      setLyricsExtra(data.lyrics_extra || [])
+    } catch (err) {
+      console.error('Suggestion error:', err)
+      if (reqId === suggestReqRef.current) {
+        setSuggestions([])
+        setLyricsExtra([])
+      }
+    } finally {
+      if (reqId === suggestReqRef.current) {
+        setIsSuggesting(false)
+      }
+    }
+  }, [])
+
+  const maybeFireSuggestion = useCallback((value) => {
+    const normalized = normalizeForTrigger(value)
+    if (!normalized) return
+    if (normalized === lastTriggeredRef.current) return
+    lastTriggeredRef.current = normalized
+    doSuggestionSearch(normalized)
+  }, [doSuggestionSearch])
+
   function handleInput(e) {
-    const val = e.target.value
-    setQuery(val)
+    const newVal = e.target.value
+    const oldVal = latestQueryRef.current
+    latestQueryRef.current = newVal
+    setQuery(newVal)
+
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => doSearch(val), 150)
+    debounceRef.current = setTimeout(() => doSearch(newVal), 150)
+
+    if (inactivityRef.current) clearTimeout(inactivityRef.current)
+
+    // Clearing the field resets the whole pipeline. Without this, an
+    // in-flight suggestion request would land later and re-show stale
+    // results over an empty query.
+    if (!newVal.trim()) {
+      suggestReqRef.current++  // invalidate any in-flight response
+      lastTriggeredRef.current = ''
+      setSuggestions(null)
+      setLyricsExtra([])
+      setIsSuggesting(false)
+      return
+    }
+
+    // Fire-on-space: only if the new last char is a space AND the
+    // previous last char was a real character. Pasting a string ending
+    // in a space also counts (oldVal.last is undefined / not-space).
+    const lastChar  = newVal.length > 0 ? newVal[newVal.length - 1] : ''
+    const prevLast  = oldVal.length > 0 ? oldVal[oldVal.length - 1] : ''
+    const grew      = newVal.length > oldVal.length
+    if (grew && lastChar === ' ' && prevLast !== ' ') {
+      maybeFireSuggestion(newVal)
+      return
+    }
+
+    // Idle fallback: 2s without further typing → treat as "user finished
+    // the prompt". `latestQueryRef` is read inside the callback so it
+    // sees whatever the user actually has in the box at fire time.
+    inactivityRef.current = setTimeout(() => {
+      maybeFireSuggestion(latestQueryRef.current)
+    }, SUGGESTION_IDLE_MS)
   }
 
   function handleClear() {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    if (inactivityRef.current) clearTimeout(inactivityRef.current)
+    suggestReqRef.current++  // invalidate in-flight suggestion
+    lastTriggeredRef.current = ''
+    latestQueryRef.current = ''
     setQuery('')
     setResults(null)
+    setSuggestions(null)
+    setLyricsExtra([])
+    setIsSuggesting(false)
     inputRef.current?.focus()
   }
 
   function handleUseCorrection(corrected) {
+    latestQueryRef.current = corrected
     setQuery(corrected)
     doSearch(corrected)
+    // Treat a correction click as a "complete prompt" event — fire the
+    // embedding pass too without waiting for the next space/idle.
+    maybeFireSuggestion(corrected)
   }
 
   const grups = results?.grups || []
   const cancons = results?.cancons || []
   const noticies = results?.noticies || []
-  const hasResults = grups.length > 0 || cancons.length > 0 || noticies.length > 0
-  const showDropdown = query.trim().length > 0
 
-  const hasLeft = grups.length > 0
-  const hasRight = cancons.length > 0 || noticies.length > 0
+  // Append lyrics_extra to cancons, deduplicating by id. Extras stay
+  // tagged via the `_embedding` flag so the UI can mark them and show
+  // their % match without conflating them with keyword hits.
+  const canconsIds = new Set(cancons.map(c => c.id))
+  const extraTagged = lyricsExtra
+    .filter(s => !canconsIds.has(s.id))
+    .map(s => ({ ...s, _embedding: true }))
+  const lletresCombined = [...cancons, ...extraTagged]
+
+  const hasResults = grups.length > 0 || lletresCombined.length > 0 || noticies.length > 0
+  const showDropdown = query.trim().length > 0
+  const showSuggestions = showDropdown && (isSuggesting || (suggestions && suggestions.length > 0))
+
+  const hasLeft = grups.length > 0 || showSuggestions
+  const hasRight = lletresCombined.length > 0 || noticies.length > 0
   const useTwoCol = hasLeft && hasRight
 
   const highlightTerms = [query.trim()]
@@ -199,49 +331,104 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                 </div>
               )}
 
-              {hasResults ? (
+              {(hasResults || showSuggestions) ? (
                 <div className={`cercador-results ${useTwoCol ? 'cercador-results--two-col' : ''}`}>
-                  {grups.length > 0 && (
-                    <div className="cercador-section cercador-section--grups">
-                      <h3 className="cercador-section-title">Grups</h3>
-                      {grups.map((g, i) => (
-                        <a
-                          key={i}
-                          className="cercador-item cercador-item--grup"
-                          href={g.viasona_link || undefined}
-                          target={g.viasona_link ? '_blank' : undefined}
-                          rel="noopener noreferrer"
-                          style={{ textDecoration: 'none', display: 'block', cursor: g.viasona_link ? 'pointer' : 'default' }}
-                        >
-                          <div className="cercador-item-main">
-                            <span className="cercador-grup-name">
-                              {highlightText(g.name, highlightTerms)}
-                            </span>
-                            {g.viasona_link && (
-                              <span className="cercador-external-icon">↗</span>
-                            )}
-                          </div>
-                          <span className="cercador-grup-meta">
-                            {g.song_count} {g.song_count === 1 ? 'cançó' : 'cançons'}
-                            {g.municipi && <> · {g.municipi}</>}
-                          </span>
-                        </a>
-                      ))}
-                      {grups.length >= 5 && (
-                        <div className="cercador-more">Veure'n més →</div>
+                  {hasLeft && (
+                    <div className="cercador-left-col">
+                      {grups.length > 0 && (
+                        <div className="cercador-section cercador-section--grups">
+                          <h3 className="cercador-section-title">Grups</h3>
+                          {grups.map((g, i) => (
+                            <a
+                              key={i}
+                              className="cercador-item cercador-item--grup"
+                              href={g.viasona_link || undefined}
+                              target={g.viasona_link ? '_blank' : undefined}
+                              rel="noopener noreferrer"
+                              style={{ textDecoration: 'none', display: 'block', cursor: g.viasona_link ? 'pointer' : 'default' }}
+                            >
+                              <div className="cercador-item-main">
+                                <span className="cercador-grup-name">
+                                  {highlightText(g.name, highlightTerms)}
+                                </span>
+                                {g.viasona_link && (
+                                  <span className="cercador-external-icon">↗</span>
+                                )}
+                              </div>
+                              <span className="cercador-grup-meta">
+                                {g.song_count} {g.song_count === 1 ? 'cançó' : 'cançons'}
+                                {g.municipi && <> · {g.municipi}</>}
+                              </span>
+                            </a>
+                          ))}
+                          {grups.length >= 5 && (
+                            <div className="cercador-more">Veure'n més →</div>
+                          )}
+                        </div>
+                      )}
+
+                      {showSuggestions && (
+                        <div className="cercador-section cercador-section--suggestions">
+                          <h3 className="cercador-section-title">Sugerències</h3>
+                          {isSuggesting ? (
+                            <div className="cercador-loading cercador-loading--inline">
+                              <span className="cercador-loading-dot" />
+                              Generant sugerències…
+                            </div>
+                          ) : (
+                            suggestions.map((s) => (
+                              <div
+                                key={s.id}
+                                className="cercador-item cercador-item--song cercador-item--suggestion"
+                                onClick={() => setSelectedSongId(s.id)}
+                              >
+                                <div className="cercador-item-main">
+                                  <span className="cercador-song-title">{s.title}</span>
+                                  {s.genre && (
+                                    <span
+                                      className="cercador-genre-tag"
+                                      style={{ background: GENRE_COLORS[s.genre] || '#888' }}
+                                    >
+                                      {s.genre}
+                                    </span>
+                                  )}
+                                  <span
+                                    className="cercador-match-badge"
+                                    title="Similitud semàntica amb la teva cerca"
+                                  >
+                                    ◈ {Math.round((s.score || 0) * 100)}%
+                                  </span>
+                                  {s.url && (
+                                    <a
+                                      href={s.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="cercador-external-icon"
+                                      onClick={e => e.stopPropagation()}
+                                    >↗</a>
+                                  )}
+                                </div>
+                                <div className="cercador-song-sub">{s.artist}</div>
+                                {s.lyrics_snippet && (
+                                  <div className="cercador-song-snippet">«{s.lyrics_snippet}»</div>
+                                )}
+                              </div>
+                            ))
+                          )}
+                        </div>
                       )}
                     </div>
                   )}
 
                   {hasRight && (
                     <div className="cercador-right-col">
-                      {cancons.length > 0 && (
+                      {lletresCombined.length > 0 && (
                         <div className="cercador-section">
                           <h3 className="cercador-section-title">Lletres</h3>
-                          {cancons.map((s) => (
+                          {lletresCombined.map((s) => (
                             <div
                               key={s.id}
-                              className="cercador-item cercador-item--song"
+                              className={`cercador-item cercador-item--song${s._embedding ? ' cercador-item--embedding' : ''}`}
                               onClick={() => setSelectedSongId(s.id)}
                             >
                               <div className="cercador-item-main">
@@ -254,6 +441,14 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                                     style={{ background: GENRE_COLORS[s.genre] || '#888' }}
                                   >
                                     {s.genre}
+                                  </span>
+                                )}
+                                {s._embedding && (
+                                  <span
+                                    className="cercador-match-badge"
+                                    title="Similitud semàntica amb la teva cerca"
+                                  >
+                                    ◈ {Math.round((s.score || 0) * 100)}%
                                   </span>
                                 )}
                                 {s.url && (

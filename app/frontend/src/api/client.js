@@ -33,6 +33,14 @@ export async function cercadorSearch(query) {
   return data
 }
 
+export async function cercadorSuggestions(query, excludeIds = []) {
+  const exclude_ids = Array.isArray(excludeIds) ? excludeIds.join(',') : (excludeIds || '')
+  const { data } = await api.get('/cercador/suggestions', {
+    params: { q: query, exclude_ids },
+  })
+  return data
+}
+
 export async function fetchNeighbors(songId, options = {}) {
   const {
     n = 20,
