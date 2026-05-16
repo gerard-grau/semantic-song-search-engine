@@ -33,10 +33,11 @@ export async function cercadorSearch(query) {
   return data
 }
 
-export async function cercadorSuggestions(query, excludeIds = []) {
-  const exclude_ids = Array.isArray(excludeIds) ? excludeIds.join(',') : (excludeIds || '')
+export async function cercadorSuggestions(query, excludeIds = [], excludeGroups = []) {
+  const exclude_ids    = Array.isArray(excludeIds)    ? excludeIds.join(',')    : (excludeIds    || '')
+  const exclude_groups = Array.isArray(excludeGroups) ? excludeGroups.join(',') : (excludeGroups || '')
   const { data } = await api.get('/cercador/suggestions', {
-    params: { q: query, exclude_ids },
+    params: { q: query, exclude_ids, exclude_groups },
   })
   return data
 }

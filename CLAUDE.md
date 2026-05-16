@@ -106,6 +106,25 @@ Two scoring modes share the visible index:
 
 After scoring, scores are min-max normalised and thresholded by percentile (70th for queries, 50th for similarity chips) to produce the survivor set.
 
+### Cercador smart suggestions
+
+The Cercador tab runs **two engines in parallel** on each keystroke:
+
+1. **Lexical** — `/api/cercador` (parser2 + inverted indices, no embeddings) — fills the Grups / Cançons / Notícies columns.
+2. **Embedding** — `/api/cercador/suggestions` (`compute_cercador_suggestions` in `embeddings.py`) — adds three independent slots, all sharing one query encoding and one matmul against the dense visible cube.
+
+| Slot | Where it renders | Fields scored | Combination | Floor | Excludes |
+|---|---|---|---|---|---|
+| `suggestions` | "Suggerències" section (main 0–4) | `embedded_lyrics`, `embedded_qualitative_description`, `embedded_title` | **max** over fields with per-field mean centering (same fusion as `/api/filter`) | `SUGGESTION_COSINE_FLOOR = 0.40` raw cosine | — |
+| `lyrics_extra` | appended to the lexical Cançons column (0–2) | **all 5** fields (lyrics, qualitative, title, album, artist) | **max** over fields, raw cosines | `SUGGESTION_COSINE_FLOOR = 0.40` | song ids already shown lexically |
+| `group_extra` | appended to the lexical Grups column (0–1) | `embedded_artist` **only** | argmax (single field; same-artist songs share the vector) | `GROUP_SUGGESTION_COSINE_FLOOR = 0.60` | artist names already shown lexically |
+
+Design notes:
+- **`suggestions`** deliberately excludes album (same-album songs are trivially similar and not what the user asked) and artist (covered by `group_extra`). Title was added because the lexical engine only matches titles containing the query verbatim — embedding-matching catches conceptually-close titles that don't share surface words.
+- **`lyrics_extra`** uses all 5 fields un-centered because its purpose is "rescue what the lexical engine missed" — a strong title/artist cosine here probably means a normalisation the cercador couldn't reach.
+- **`group_extra`** has its own (higher) floor because `embedded_artist` is just bge-m3's encoding of the artist *name* as a string — no semantic info about the music, so anything below 0.60 is mostly incidental letter overlap. The displayed score on the UI is the raw cosine, clamped to [0, 1].
+- Constants are top-of-file in `embeddings.py` (`SUGGESTION_FIELDS`, `SUGGESTION_COSINE_FLOOR`, `ARTIST_FIELD_IDX`, `GROUP_SUGGESTION_COSINE_FLOOR`).
+
 ### 2D projection augmentation
 
 `data_pipeline.run_projection` builds layout vectors as `concat(unit(text), alpha_genre * unit(genre_profile))` so songs cluster by genre. With both halves unit-norm, `alpha_genre² / (1 + alpha_genre²)` is genre's share of squared distance. Default `alpha_genre=2.0` ≈ 80% genre / 20% text. CLI flags: `--genre-mode {soft,onehot,none}`, `--alpha-genre`, `--method {umap,tsne,pca_umap}`, `--pca-dim`.

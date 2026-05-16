@@ -125,8 +125,21 @@ def _parse_exclude_ids(raw: str) -> set[int]:
     return out
 
 
+def _parse_exclude_names(raw: str) -> set[str]:
+    """``"Manel,Sopa de Cabra"`` → ``{"Manel", "Sopa de Cabra"}``.
+
+    Names are passed verbatim from the frontend (the lexical Grups column
+    already renders them with the canonical capitalisation from grups.csv),
+    so we strip but don't normalise — the embedding side uses the same
+    ``s["artist"]`` string the songs table carries, which matches.
+    """
+    if not raw:
+        return set()
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
 @router.get("/cercador/suggestions")
-def cercador_suggestions(q: str = "", exclude_ids: str = ""):
+def cercador_suggestions(q: str = "", exclude_ids: str = "", exclude_groups: str = ""):
     """Embedding-based companion to ``/api/cercador``.
 
     Response shape::
@@ -136,31 +149,59 @@ def cercador_suggestions(q: str = "", exclude_ids: str = ""):
                               genre, url, score }, … ],   # top 4
           "lyrics_extra": [ { id, title, artist, lyrics_snippet,
                               genre, url, score }, … ],   # top 2
+          "group_extra":  null | { …grup_result fields…, score },  # top 0–1
         }
 
-    ``score`` is cosine in [0, 1]. ``exclude_ids`` is a comma-separated
-    list of song ids the frontend already shows in the Lletres column —
-    they're filtered out of ``lyrics_extra`` so the extras are always
-    NEW hits the keyword cercador missed.
+    ``score`` is cosine in [0, 1]. ``exclude_ids`` excludes songs already
+    shown in the Lletres column; ``exclude_groups`` (comma-separated artist
+    names) excludes groups already shown in the Grups column. Both keep
+    the embedding extras strictly *new* hits.
     """
     q = q.strip()
     if not q:
-        return {"suggestions": [], "lyrics_extra": []}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": None}
 
-    excluded = _parse_exclude_ids(exclude_ids)
+    excluded_ids   = _parse_exclude_ids(exclude_ids)
+    excluded_names = _parse_exclude_names(exclude_groups)
 
     try:
         index = get_visible_index()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Suggestions: visible index unavailable (%s)", exc)
-        return {"suggestions": [], "lyrics_extra": []}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": None}
 
     scored = compute_cercador_suggestions(
         query_text=q,
         index=index,
-        exclude_ids=excluded,
+        exclude_ids=excluded_ids,
+        exclude_artist_names=excluded_names,
     )
     songs = index["songs"]
+
+    group_extra = None
+    if scored["group_extra"]:
+        artist_name, score = scored["group_extra"][0]
+        grup_record = get_index().find_grup_by_name(artist_name)
+        # If we have an embedding-strong artist but no grups.csv record for
+        # them, surface a minimal stub instead of dropping the suggestion
+        # entirely — the user still wants to see "we found this artist".
+        if grup_record is not None:
+            group_extra = {
+                **_grup_result(grup_record),
+                "score": round(max(0.0, min(1.0, float(score))), 4),
+            }
+        else:
+            group_extra = {
+                "id":           0,
+                "name":         artist_name,
+                "song_count":   0,
+                "viasona_link": "",
+                "foto":         "",
+                "municipi":     "",
+                "regio":        "",
+                "genres":       [],
+                "score":        round(max(0.0, min(1.0, float(score))), 4),
+            }
 
     return {
         "suggestions": [
@@ -171,4 +212,5 @@ def cercador_suggestions(q: str = "", exclude_ids: str = ""):
             _suggestion_result(songs[i], score)
             for i, score in scored["lyrics_extra"]
         ],
+        "group_extra": group_extra,
     }

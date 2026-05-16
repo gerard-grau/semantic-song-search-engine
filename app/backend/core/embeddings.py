@@ -76,6 +76,44 @@ SIMILAR_FIELDS = (0, 1, 2, 4)  # lyrics, description, title, artist
 SIMILAR_FIELD_POWER = 4.0
 SIMILAR_GATE_POWER  = 0.5
 
+# Cercador smart-suggestions tuning.
+#
+# SUGGESTION_FIELDS — which song fields the embedding pass scores against.
+# We pair lyrics with qualitative_description and title:
+#   * lyrics  — direct topical signal from the actual words sung.
+#   * qualitative_description — thematic blurb (when not template-noise).
+#   * title   — semantic match on the song name itself. The lexical engine
+#               only finds titles that *contain* the query string verbatim
+#               (with typo tolerance), so embedding-matching on titles
+#               catches titles that are conceptually close to the query
+#               without sharing surface words (query "lluna" matching a
+#               title "La nit", etc.).
+# Artist and album are still excluded — artist is covered by the dedicated
+# group_extra channel, and album is too noisy (same album → trivially
+# similar songs that aren't what the user asked for).
+# Combining the three with max-over-fields lets whichever side caught the
+# query win, so a heavily-templated qualitative blurb can no longer drag
+# a clean lyrics or title match toward the average.
+#
+# SUGGESTION_COSINE_FLOOR — absolute raw-cosine threshold. Songs whose best
+# field cosine is below this aren't shown, so weak queries return 0–K results
+# instead of always K mediocre ones. Tuned for bge-m3 on Catalan; below
+# ~0.35 cosines are mostly template/structural noise.
+SUGGESTION_FIELDS = (0, 1, 2)     # lyrics, qualitative_description, title
+SUGGESTION_COSINE_FLOOR = 0.40
+# Index of the per-song artist-embedding field — same source the visible
+# cube uses (see EMBEDDING_FIELD_COLUMNS in data_loader). Group suggestions
+# match the user query against this field, deduped by artist name.
+ARTIST_FIELD_IDX = 4
+# Separate floor for the group-extra channel. The artist field is just
+# bge-m3's encoding of the artist's *name* as a string — it has no semantic
+# signal about the artist's music, so even a moderate cosine (0.4–0.5)
+# usually means "the query has some letters in common with the name", not
+# "this artist is what the user meant". Set the bar much higher so only
+# genuine near-matches (typo-tolerant lexical-near-misses, abbreviations
+# like 'L. Llach', unusual word orders) get through.
+GROUP_SUGGESTION_COSINE_FLOOR = 0.60
+
 
 # ── Fast vectorised path ────────────────────────────────────────────────────
 #
@@ -336,28 +374,62 @@ def compute_cercador_suggestions(
     query_text: str,
     index: dict,
     exclude_ids: set[int] | None = None,
+    exclude_artist_names: set[str] | None = None,
     suggestions_k: int = 4,
     lyrics_extra_k: int = 2,
-    qualitative_field_idx: int = 1,
 ) -> dict:
-    """Embedding-based "Sugerències" + extra lyrics for the cercador.
+    """Embedding-based smart-suggestions companion to /api/cercador.
 
-    One query encoding is reused for both passes:
+    One query encoding is reused across three independent slots; one
+    stacked matmul computes every field cosine for every song. The
+    three slots, summarised:
 
-    * **suggestions** — top ``suggestions_k`` songs ranked by raw cosine
-      against the qualitative-description field (row 1 of the dense
-      index). The intent is "the user described a vibe; surface songs
-      whose qualitative blurb matches that vibe", so we deliberately do
-      NOT max over fields here — title/artist matches are already covered
-      by the keyword cercador.
-    * **lyrics_extra** — top ``lyrics_extra_k`` songs ranked by
-      max-over-fields cosine, with ``exclude_ids`` masked out. These
-      get appended to the keyword-cercador's lyrics column so the user
-      sees embedding-discovered matches the keyword index missed.
+    +----------------+----------------------------+----------------------+----------+
+    | slot           | fields scored              | combination          | floor    |
+    +================+============================+======================+==========+
+    | suggestions    | lyrics, qualitative, title | max + per-field      | 0.40     |
+    |                | (SUGGESTION_FIELDS)        | mean centering       |          |
+    +----------------+----------------------------+----------------------+----------+
+    | lyrics_extra   | ALL 5 fields               | max (raw, no center) | 0.40     |
+    |                | (lyrics, qual, title,      |                      |          |
+    |                |  album, artist)            |                      |          |
+    +----------------+----------------------------+----------------------+----------+
+    | group_extra    | embedded_artist ONLY       | argmax (single field,| 0.60     |
+    |                | (ARTIST_FIELD_IDX = 4)     | deduped by name)     |          |
+    +----------------+----------------------------+----------------------+----------+
 
-    Returns ``(row_idx, raw_cosine)`` pairs in ``suggestions`` /
-    ``lyrics_extra`` keys; row indices point into ``index["songs"]``.
-    Empty lists on encoder failure or empty matrix.
+    * **suggestions** — top up-to-``suggestions_k`` songs ranked by max
+      over the SUGGESTION_FIELDS cosines, each field mean-centered across
+      the visible set (mirrors what ``filter_embeddings_fast`` does on
+      /api/filter). Artist and album are excluded — artist has its own
+      ``group_extra`` slot, and album is too noisy. Title is included
+      so the embedding can match conceptually-close song names that
+      don't share surface words with the query (which the lexical
+      engine cannot reach). Mean-centering removes each field's
+      common-mode bias (the template "La cançó X de Y evoca temes
+      principals…" cancels out), so the max picks the field that
+      actually got the query rather than the field with the heaviest
+      template prior.
+    * **lyrics_extra** — top up-to-``lyrics_extra_k`` songs ranked by
+      max over ALL fields (raw, not centered), with ``exclude_ids`` and
+      the same 0.40 floor applied. Appended to the lexical Cançons
+      column so the user sees embedding-discovered matches the keyword
+      index missed; raw all-fields max is intentional here because the
+      slot's purpose is "rescue lexical misses" (a strong artist/title
+      cosine probably means a normalisation the cercador couldn't reach).
+    * **group_extra** — top 1 artist name by cosine on the
+      ``embedded_artist`` field, deduped (same-artist rows share the same
+      vector), with ``exclude_artist_names`` filtered out and a SEPARATE
+      higher floor (``GROUP_SUGGESTION_COSINE_FLOOR = 0.60``). The artist
+      field is just bge-m3's encoding of the *name string* — no semantic
+      info about the music — so below 0.60 cosines are mostly incidental
+      letter overlap, not real matches. Length 0 or 1.
+
+    Returns ``(row_idx, raw_cosine)`` pairs for the song-based slots and
+    ``(artist_name, raw_cosine)`` for ``group_extra``. ``raw_cosine`` is
+    the best-field cosine (clamped to [0, 1] by the route layer) so the
+    frontend's "% match" reflects the actual closest field, not a centered
+    value. Empty lists on encoder failure or empty matrix.
     """
     matrix = index["matrix"]   # (N, F, D), L2-normalised
     valid  = index["valid"]    # (N, F)
@@ -379,52 +451,104 @@ def compute_cercador_suggestions(
         return {"suggestions": [], "lyrics_extra": []}
     q = q / q_norm
 
-    # ── Suggestions: cosine vs qualitative-description field only ────
-    suggestions: list[tuple[int, float]] = []
-    if 0 <= qualitative_field_idx < F:
-        qual_vecs = matrix[:, qualitative_field_idx, :]   # (N, D)
-        qual_valid = valid[:, qualitative_field_idx]       # (N,)
-        qual_sims = qual_vecs @ q                          # (N,)
-        masked = np.where(qual_valid, qual_sims, -np.inf)
-
-        valid_n = int(qual_valid.sum())
-        k = min(suggestions_k, valid_n)
-        if k > 0:
-            top = np.argpartition(-masked, k - 1)[:k]
-            top = top[np.argsort(-masked[top])]
-            suggestions = [
-                (int(i), float(masked[i]))
-                for i in top
-                if np.isfinite(masked[i])
-            ]
-
-    # ── Lyrics extra: max over fields, exclude_ids masked out ────────
-    # One stacked matmul against the full (N, F, D) cube. Mask invalid
-    # field cells with -inf so they can't win the max; mask excluded ids
-    # with -inf so they're dropped from the top-K.
-    field_sims = (matrix.reshape(N * F, D) @ q).reshape(N, F)
-    field_sims = np.where(valid, field_sims, -np.inf)
-    max_sims = field_sims.max(axis=1)                       # (N,)
-
+    # One matmul → every (song, field) cosine in (N, F).
+    field_sims = (matrix.reshape(N * F, D) @ q).reshape(N, F).astype(np.float64)
+    # Used by both passes to mask excluded ids.
+    excluded_pos: list[int] = []
     if exclude_ids:
         id_to_idx = index["id_to_idx"]
         excluded_pos = [id_to_idx[i] for i in exclude_ids if i in id_to_idx]
-        if excluded_pos:
-            max_sims[excluded_pos] = -np.inf
 
+    # ── Suggestions: max over (lyrics, qualitative_description) with
+    # per-field mean centering. Title/artist/album are excluded by
+    # restricting to SUGGESTION_FIELDS.
+    suggestions: list[tuple[int, float]] = []
+    sug_fields = [f for f in SUGGESTION_FIELDS if f < F]
+    if sug_fields:
+        sims = field_sims[:, sug_fields]          # (N, k) raw cosines
+        v    = valid[:, sug_fields]               # (N, k) per-field validity
+
+        # Per-field mean across valid songs — removes the field-level
+        # common-mode (the template prior on qualitative_description, the
+        # general Catalan-vocabulary prior on lyrics) so they're comparable.
+        counts     = v.sum(axis=0).clip(min=1)
+        field_mean = np.where(v, sims, 0.0).sum(axis=0) / counts
+        centered   = np.where(v, sims - field_mean, -np.inf)
+        ranking    = centered.max(axis=1)         # (N,) used for ordering
+
+        # Absolute floor uses RAW cosine, not centered, so we keep only
+        # songs that genuinely cosine-match the query in some field.
+        raw_max = np.where(v, sims, -np.inf).max(axis=1)  # (N,)
+
+        keep = np.isfinite(ranking) & (raw_max >= SUGGESTION_COSINE_FLOOR)
+        for pos in excluded_pos:
+            keep[pos] = False
+
+        n_keep = int(keep.sum())
+        if n_keep > 0:
+            ranking_masked = np.where(keep, ranking, -np.inf)
+            k = min(suggestions_k, n_keep)
+            top = np.argpartition(-ranking_masked, k - 1)[:k]
+            top = top[np.argsort(-ranking_masked[top])]
+            suggestions = [
+                (int(i), float(raw_max[i]))
+                for i in top
+                if np.isfinite(ranking_masked[i])
+            ]
+
+    # ── Lyrics extra: max over ALL fields (raw), with exclude_ids and
+    # the absolute floor. These are "lexical engine missed it" rescues,
+    # so we don't restrict to SUGGESTION_FIELDS — a strong title/artist
+    # cosine here means the lexical match missed it (probably a typo or
+    # an unusual normalisation), which is exactly what we want to surface.
+    full_sims = np.where(valid, field_sims, -np.inf)
+    max_sims = full_sims.max(axis=1)              # (N,)
+    for pos in excluded_pos:
+        max_sims[pos] = -np.inf
+
+    keep_extra = np.isfinite(max_sims) & (max_sims >= SUGGESTION_COSINE_FLOOR)
     lyrics_extra: list[tuple[int, float]] = []
-    finite_n = int(np.isfinite(max_sims).sum())
-    k2 = min(lyrics_extra_k, finite_n)
-    if k2 > 0:
-        top2 = np.argpartition(-max_sims, k2 - 1)[:k2]
-        top2 = top2[np.argsort(-max_sims[top2])]
+    n_keep_extra = int(keep_extra.sum())
+    if n_keep_extra > 0:
+        masked_extra = np.where(keep_extra, max_sims, -np.inf)
+        k2 = min(lyrics_extra_k, n_keep_extra)
+        top2 = np.argpartition(-masked_extra, k2 - 1)[:k2]
+        top2 = top2[np.argsort(-masked_extra[top2])]
         lyrics_extra = [
             (int(i), float(max_sims[i]))
             for i in top2
-            if np.isfinite(max_sims[i])
+            if np.isfinite(masked_extra[i])
         ]
 
-    return {"suggestions": suggestions, "lyrics_extra": lyrics_extra}
+    # ── Group extra: top-1 unique artist by cosine on embedded_artist.
+    # Same-artist songs share the artist string → share the artist vector,
+    # so argmax over the column directly identifies the top artist; the
+    # route layer dedupes against names already shown in the lexical
+    # Grups column via ``exclude_artist_names``.
+    group_extra: list[tuple[str, float]] = []
+    if ARTIST_FIELD_IDX < F:
+        artist_sims  = field_sims[:, ARTIST_FIELD_IDX]
+        artist_valid = valid[:, ARTIST_FIELD_IDX]
+        artist_masked = np.where(artist_valid, artist_sims, -np.inf)
+        if exclude_artist_names:
+            songs_meta = index["songs"]
+            for i, s in enumerate(songs_meta):
+                name = (s.get("artist") or "").strip()
+                if name and name in exclude_artist_names:
+                    artist_masked[i] = -np.inf
+        if np.isfinite(artist_masked).any():
+            best = int(np.argmax(artist_masked))
+            best_cos = float(artist_masked[best])
+            if best_cos >= GROUP_SUGGESTION_COSINE_FLOOR:
+                name = (index["songs"][best].get("artist") or "").strip()
+                if name:
+                    group_extra = [(name, best_cos)]
+
+    return {
+        "suggestions":  suggestions,
+        "lyrics_extra": lyrics_extra,
+        "group_extra":  group_extra,
+    }
 
 
 def _word_overlap_filter_fast(

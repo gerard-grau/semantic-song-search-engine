@@ -46,6 +46,10 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
   // the Sugerències section before any embedding call has been made.
   const [suggestions, setSuggestions] = useState(null)
   const [lyricsExtra, setLyricsExtra] = useState([])
+  // Embedding-suggested group (the lexical engine missed it but the artist
+  // embedding matched the query). 0 or 1 entry, kept alongside the lyrics
+  // extras so the whole embedding pass shares one fetch.
+  const [groupExtra, setGroupExtra] = useState(null)
   const [isSuggesting, setIsSuggesting] = useState(false)
 
   const debounceRef = useRef(null)
@@ -112,17 +116,21 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     setIsSuggesting(true)
     setSuggestions(null)
     setLyricsExtra([])
+    setGroupExtra(null)
     try {
       const excludeIds = (latestResultsRef.current?.cancons || []).map(c => c.id)
-      const data = await cercadorSuggestions(q, excludeIds)
+      const excludeGroups = (latestResultsRef.current?.grups || []).map(g => g.name)
+      const data = await cercadorSuggestions(q, excludeIds, excludeGroups)
       if (reqId !== suggestReqRef.current) return
       setSuggestions(data.suggestions || [])
       setLyricsExtra(data.lyrics_extra || [])
+      setGroupExtra(data.group_extra || null)
     } catch (err) {
       console.error('Suggestion error:', err)
       if (reqId === suggestReqRef.current) {
         setSuggestions([])
         setLyricsExtra([])
+        setGroupExtra(null)
       }
     } finally {
       if (reqId === suggestReqRef.current) {
@@ -158,6 +166,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
       lastTriggeredRef.current = ''
       setSuggestions(null)
       setLyricsExtra([])
+      setGroupExtra(null)
       setIsSuggesting(false)
       return
     }
@@ -191,6 +200,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     setResults(null)
     setSuggestions(null)
     setLyricsExtra([])
+    setGroupExtra(null)
     setIsSuggesting(false)
     inputRef.current?.focus()
   }
@@ -217,11 +227,21 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     .map(s => ({ ...s, _embedding: true }))
   const lletresCombined = [...cancons, ...extraTagged]
 
-  const hasResults = grups.length > 0 || lletresCombined.length > 0 || noticies.length > 0
+  // Append the embedding-suggested group at the end of the Grups list,
+  // marked _embedding so the UI can flag it. The backend already excludes
+  // groups that are in the lexical results, so a dupe-by-name check here
+  // is belt-and-braces only.
+  const grupsNames = new Set(grups.map(g => g.name))
+  const grupExtraTagged = (groupExtra && !grupsNames.has(groupExtra.name))
+    ? [{ ...groupExtra, _embedding: true }]
+    : []
+  const grupsCombined = [...grups, ...grupExtraTagged]
+
+  const hasResults = grupsCombined.length > 0 || lletresCombined.length > 0 || noticies.length > 0
   const showDropdown = query.trim().length > 0
   const showSuggestions = showDropdown && (isSuggesting || (suggestions && suggestions.length > 0))
 
-  const hasLeft = grups.length > 0 || showSuggestions
+  const hasLeft = grupsCombined.length > 0 || showSuggestions
   const hasRight = lletresCombined.length > 0 || noticies.length > 0
   const useTwoCol = hasLeft && hasRight
 
@@ -335,13 +355,16 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                 <div className={`cercador-results ${useTwoCol ? 'cercador-results--two-col' : ''}`}>
                   {hasLeft && (
                     <div className="cercador-left-col">
-                      {grups.length > 0 && (
+                      {grupsCombined.length > 0 && (
                         <div className="cercador-section cercador-section--grups">
                           <h3 className="cercador-section-title">Grups</h3>
-                          {grups.map((g, i) => (
+                          {grupsCombined.map((g, i) => (
                             <a
                               key={i}
-                              className="cercador-item cercador-item--grup"
+                              className={
+                                'cercador-item cercador-item--grup'
+                                + (g._embedding ? ' cercador-item--embedding' : '')
+                              }
                               href={g.viasona_link || undefined}
                               target={g.viasona_link ? '_blank' : undefined}
                               rel="noopener noreferrer"
@@ -349,6 +372,14 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                             >
                               <div className="cercador-item-main">
                                 <span className="cercador-grup-name">
+                                  {g._embedding && (
+                                    <span
+                                      className="cercador-embedding-badge"
+                                      title={`Sugerit per similitud d'embedding (${Math.round((g.score || 0) * 100)}% match)`}
+                                    >
+                                      ✦
+                                    </span>
+                                  )}
                                   {highlightText(g.name, highlightTerms)}
                                 </span>
                                 {g.viasona_link && (
@@ -356,8 +387,13 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                                 )}
                               </div>
                               <span className="cercador-grup-meta">
-                                {g.song_count} {g.song_count === 1 ? 'cançó' : 'cançons'}
-                                {g.municipi && <> · {g.municipi}</>}
+                                {g._embedding
+                                  ? <em>Sugerit · {Math.round((g.score || 0) * 100)}% match</em>
+                                  : <>
+                                      {g.song_count} {g.song_count === 1 ? 'cançó' : 'cançons'}
+                                      {g.municipi && <> · {g.municipi}</>}
+                                    </>
+                                }
                               </span>
                             </a>
                           ))}

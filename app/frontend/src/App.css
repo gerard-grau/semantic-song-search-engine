@@ -2018,6 +2018,17 @@
   border-radius: 1px;
 }
 
+/* Small star prefix on embedding-suggested grup rows so the user can tell
+   at a glance which entry came from the smart suggestions rather than
+   the keyword engine. The left rail above handles emphasis; this is
+   purely a glanceable hint. */
+.cercador-embedding-badge {
+  display: inline-block;
+  margin-right: 4px;
+  color: var(--brand);
+  font-size: 0.85em;
+}
+
 .cercador-match-badge {
   font-family: var(--font-mono);
   font-size: 0.62rem;

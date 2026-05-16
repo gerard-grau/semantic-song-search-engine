@@ -315,6 +315,24 @@ class CercadorIndex:
             for tok in set(tokenize(name)):
                 self.grups_idx[tok].append((i, self.W_GRUP_NAME))
 
+    def find_grup_by_name(self, name: str) -> dict | None:
+        """Resolve an artist string to its group record via normalized name.
+
+        Used by the embedding-suggestion path: we have an artist name from
+        the songs table (where the bge-m3 ``embedded_artist`` lives) and
+        need the grups.csv record (id, foto, municipi, song_count) to
+        render the same UI as a lexical group hit.
+        """
+        if not name:
+            return None
+        key = normalize(name)
+        if not key:
+            return None
+        for i, n in enumerate(self._grups_name_norm):
+            if n == key:
+                return self.grups[i]
+        return None
+
     def _index_noticies(self) -> None:
         self._noticies_title_norm = [""] * len(self.noticies)
         for i, n in enumerate(self.noticies):
