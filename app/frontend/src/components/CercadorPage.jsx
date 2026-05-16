@@ -51,6 +51,10 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
   // extras so the whole embedding pass shares one fetch.
   const [groupExtra, setGroupExtra] = useState(null)
   const [isSuggesting, setIsSuggesting] = useState(false)
+  // Artist filter: when set, all Qdrant suggestion calls are narrowed to
+  // songs by this exact artist name via a Qdrant payload filter.
+  const [artistFilter, setArtistFilter] = useState(null)
+  const artistFilterRef = useRef(null)
 
   const debounceRef = useRef(null)
   const inputRef = useRef(null)
@@ -107,20 +111,24 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     }
   }, [])
 
-  const doSuggestionSearch = useCallback(async (q) => {
+  // Keep a ref so the async callback always reads the current filter value
+  // without needing to be recreated on every artistFilter state change.
+  useEffect(() => { artistFilterRef.current = artistFilter }, [artistFilter])
+
+  const doSuggestionSearch = useCallback(async (q, forceArtistFilter) => {
     if (!q) return
     const reqId = ++suggestReqRef.current
-    // Reset suggestions to null so the section renders "generant
-    // sugerències" while we wait; lyrics_extra is also cleared so the
-    // Lletres column doesn't show stale embedding picks under a new query.
+    const activeFilter = forceArtistFilter !== undefined
+      ? forceArtistFilter
+      : artistFilterRef.current
     setIsSuggesting(true)
     setSuggestions(null)
     setLyricsExtra([])
     setGroupExtra(null)
     try {
-      const excludeIds = (latestResultsRef.current?.cancons || []).map(c => c.id)
-      const excludeGroups = (latestResultsRef.current?.grups || []).map(g => g.name)
-      const data = await cercadorSuggestions(q, excludeIds, excludeGroups)
+      const excludeIds    = (latestResultsRef.current?.cancons || []).map(c => c.id)
+      const excludeGroups = (latestResultsRef.current?.grups   || []).map(g => g.name)
+      const data = await cercadorSuggestions(q, excludeIds, excludeGroups, activeFilter)
       if (reqId !== suggestReqRef.current) return
       setSuggestions(data.suggestions || [])
       setLyricsExtra(data.lyrics_extra || [])
@@ -202,7 +210,23 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     setLyricsExtra([])
     setGroupExtra(null)
     setIsSuggesting(false)
+    setArtistFilter(null)
     inputRef.current?.focus()
+  }
+
+  function handleSetArtistFilter(name) {
+    setArtistFilter(name)
+    artistFilterRef.current = name
+    // Re-fire suggestion search immediately with the new filter
+    lastTriggeredRef.current = ''  // allow re-triggering the same query
+    doSuggestionSearch(latestQueryRef.current, name)
+  }
+
+  function handleClearArtistFilter() {
+    setArtistFilter(null)
+    artistFilterRef.current = null
+    lastTriggeredRef.current = ''
+    doSuggestionSearch(latestQueryRef.current, null)
   }
 
   function handleUseCorrection(corrected) {
@@ -351,6 +375,18 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                 </div>
               )}
 
+              {artistFilter && (
+                <div className="cercador-artist-filter">
+                  <span className="cercador-artist-filter-label">Filtrant per:</span>
+                  <strong className="cercador-artist-filter-name">{artistFilter}</strong>
+                  <button
+                    className="cercador-artist-filter-clear"
+                    onClick={handleClearArtistFilter}
+                    aria-label="Treure filtre d'artista"
+                  >×</button>
+                </div>
+              )}
+
               {(hasResults || showSuggestions) ? (
                 <div className={`cercador-results ${useTwoCol ? 'cercador-results--two-col' : ''}`}>
                   {hasLeft && (
@@ -385,6 +421,24 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                                 {g.viasona_link && (
                                   <span className="cercador-external-icon">↗</span>
                                 )}
+                                <button
+                                  className={
+                                    'cercador-filter-btn'
+                                    + (artistFilter === g.name ? ' cercador-filter-btn--active' : '')
+                                  }
+                                  title={artistFilter === g.name ? 'Treure filtre' : `Filtrar per ${g.name}`}
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    if (artistFilter === g.name) {
+                                      handleClearArtistFilter()
+                                    } else {
+                                      handleSetArtistFilter(g.name)
+                                    }
+                                  }}
+                                >
+                                  {artistFilter === g.name ? 'Filtrant ✓' : 'Filtrar'}
+                                </button>
                               </div>
                               <span className="cercador-grup-meta">
                                 {g._embedding
