@@ -20,3 +20,6 @@ tensorflow>=2.16,<3.0
 
 # Cercador — Catalan lexicon for typo correction (parser2)
 wordfreq>=3.1,<4.0
+
+# Qdrant vector database client (connects to Docker instance)
+qdrant-client>=1.9,<2.0
