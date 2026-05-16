@@ -434,21 +434,21 @@ def compute_cercador_suggestions(
     matrix = index["matrix"]   # (N, F, D), L2-normalised
     valid  = index["valid"]    # (N, F)
     if matrix.size == 0:
-        return {"suggestions": [], "lyrics_extra": []}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": []}
 
     N, F, D = matrix.shape
     if F == 0 or D == 0:
-        return {"suggestions": [], "lyrics_extra": []}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": []}
 
     try:
         q = np.asarray(encode_query(query_text), dtype=np.float32)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Suggestions: encoder unavailable (%s)", exc)
-        return {"suggestions": [], "lyrics_extra": []}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": []}
 
     q_norm = float(np.linalg.norm(q))
     if q_norm < 1e-12:
-        return {"suggestions": [], "lyrics_extra": []}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": []}
     q = q / q_norm
 
     # One matmul → every (song, field) cosine in (N, F).

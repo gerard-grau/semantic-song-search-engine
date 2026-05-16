@@ -99,7 +99,7 @@ def _load_title_artist_index() -> dict[tuple[str, str], int]:
         df = df.rename(columns={"id": "id_lyrics"})
     elif _AUGMENTED_CSV.exists():
         df = pd.read_csv(
-            _AUGMENTED_CSV, encoding="latin-1",
+            _AUGMENTED_CSV, encoding="utf-8-sig",
             usecols=["id_lyrics", "title", "artist"],
             on_bad_lines="skip",
         )
@@ -228,6 +228,8 @@ def run_top5000_embeddings(ids: list[int]) -> dict:
 def _embedding_to_array(val) -> np.ndarray:
     if val is None:
         return np.empty(0, dtype=np.float32)
+    if isinstance(val, bytes):
+        val = val.decode("utf-8")
     if isinstance(val, str):
         s = val.strip()
         if s.startswith("[") and s.endswith("]"):

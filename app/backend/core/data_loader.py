@@ -82,6 +82,8 @@ EMBEDDING_FIELD_COLUMNS: tuple[str, ...] = (
 def _embedding_to_list(val) -> list[float]:
     if val is None:
         return []
+    if isinstance(val, bytes):
+        val = val.decode("utf-8")
     if isinstance(val, str):
         s = val.strip()
         if s.startswith("[") and s.endswith("]"):
@@ -100,6 +102,8 @@ def _embedding_to_array(val, dim: int | None = None) -> np.ndarray:
     """
     if val is None:
         return np.zeros(dim or 0, dtype=np.float32)
+    if isinstance(val, bytes):
+        val = val.decode("utf-8")
     if isinstance(val, str):
         s = val.strip()
         if s.startswith("[") and s.endswith("]"):
@@ -248,7 +252,7 @@ def _load_metadata_for_ids(ids: set[int]) -> list[dict]:
         raise FileNotFoundError(f"augmented_songs.csv not found at {_AUGMENTED}")
 
     aug_rows = list(_iter_csv_rows(
-        _AUGMENTED, encoding="latin-1", id_column="id_lyrics", wanted_ids=ids,
+        _AUGMENTED, encoding="utf-8-sig", id_column="id_lyrics", wanted_ids=ids,
     ))
     if not aug_rows:
         return []
