@@ -148,6 +148,7 @@ def cercador_suggestions(
     exclude_ids: str = "",
     exclude_groups: str = "",
     artist_filter: str = "",
+    mode: str = "all",
 ):
     """Embedding-based companion to ``/api/cercador``.
 
@@ -177,21 +178,24 @@ def cercador_suggestions(
     """
     q = q.strip()
     artist_filter = artist_filter.strip() or None
+    mode = mode.strip() or "all"
 
     if not q:
-        return {"suggestions": [], "lyrics_extra": [], "group_extra": None}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": []}
 
     excluded_ids   = _parse_exclude_ids(exclude_ids)
     excluded_names = _parse_exclude_names(exclude_groups)
 
+    # ── Matrix mode: bypass Qdrant entirely ───────────────────────────────────
+    if mode == "matrix":
+        return _matrix_suggestions(q, excluded_ids, excluded_names)
+
     # ── Qdrant path ────────────────────────────────────────────────────────────
-    qdrant_result = _qdrant_suggestions(q, excluded_ids, excluded_names, artist_filter)
+    qdrant_result = _qdrant_suggestions(q, excluded_ids, excluded_names, artist_filter, mode)
     if qdrant_result is not None:
         return qdrant_result
 
-    # ── Matrix fallback (existing BGE-M3 cube, top-5000 only) ─────────────────
-    # artist_filter is silently ignored in fallback mode because the matrix
-    # index has no payload — the user will see results across all artists.
+    # ── Matrix fallback (Qdrant unavailable) ──────────────────────────────────
     return _matrix_suggestions(q, excluded_ids, excluded_names)
 
 
@@ -202,8 +206,15 @@ def _qdrant_suggestions(
     excluded_ids: set[int],
     excluded_names: set[str],
     artist_filter: str | None,
+    mode: str = "all",
 ) -> dict | None:
-    """Try Qdrant; return a complete response dict or None if unavailable."""
+    """Try Qdrant; return a complete response dict or None if unavailable.
+
+    mode controls which collections are searched:
+      "all"         — qualitative + lyrics chunks (default)
+      "lyrics"      — lyrics chunks only (passage matching)
+      "qualitative" — qualitative descriptions only (theme/mood)
+    """
     from app.backend.core import qdrant_search  # lazy import — avoids startup cost
 
     if not qdrant_search.is_available():
@@ -221,12 +232,21 @@ def _qdrant_suggestions(
         logger.warning("Encoder unavailable for Qdrant path (%s)", exc)
         return None
 
-    qual_results   = qdrant_search.search_qualitative(
-        q_vec, limit=5, artist_filter=artist_filter, exclude_ids=excluded_ids,
-    )
-    lyrics_results = qdrant_search.search_lyrics_chunks(
-        q_vec, limit=3, artist_filter=artist_filter, exclude_ids=excluded_ids,
-    )
+    use_qual   = mode in ("all", "qualitative")
+    use_lyrics = mode in ("all", "lyrics")
+
+    qual_results: list[dict] | None = []
+    if use_qual:
+        qual_results = qdrant_search.search_qualitative(
+            q_vec, limit=10, artist_filter=artist_filter, exclude_ids=excluded_ids,
+        )
+
+    lyrics_results: list[dict] | None = []
+    if use_lyrics:
+        lyrics_results = qdrant_search.search_lyrics_chunks(
+            q_vec, limit=10, artist_filter=artist_filter, exclude_ids=excluded_ids,
+            query_text=q,
+        )
 
     if qual_results is None or lyrics_results is None:
         # Qdrant became unavailable mid-request; fall back to matrix
@@ -249,15 +269,22 @@ def _qdrant_suggestions(
             "lyrics_snippet": r.get("lyrics_snippet") or meta.get("lyrics_snippet", ""),
         }
 
-    suggestions  = [_enrich(r) for r in qual_results]
-    lyrics_extra = [_enrich(r) for r in lyrics_results]
+    # Route results to the right slots depending on mode:
+    #   "all"         → qualitative → suggestions, lyrics → lyrics_extra
+    #   "lyrics"      → lyrics → suggestions (nothing in lyrics_extra)
+    #   "qualitative" → qualitative → suggestions (nothing in lyrics_extra)
+    if mode == "lyrics":
+        suggestions  = [_enrich(r) for r in lyrics_results]
+        lyrics_extra = []
+    else:
+        suggestions  = [_enrich(r) for r in qual_results]
+        lyrics_extra = [_enrich(r) for r in lyrics_results]
 
     # group_extra via artist embedding column (one matmul, no second encode)
-    group_extra = None
+    group_extra = []
     if index is not None:
         ge = compute_group_extra(q_arr, index, exclude_artist_names=excluded_names)
-        if ge:
-            group_extra = _build_group_extra(*ge[0])
+        group_extra = [_build_group_extra(name, score) for name, score in ge]
 
     return {"suggestions": suggestions, "lyrics_extra": lyrics_extra, "group_extra": group_extra}
 
@@ -282,9 +309,10 @@ def _matrix_suggestions(
     )
     songs = index["songs"]
 
-    group_extra = None
-    if scored["group_extra"]:
-        group_extra = _build_group_extra(*scored["group_extra"][0])
+    group_extra = [
+        _build_group_extra(name, score)
+        for name, score in scored["group_extra"]
+    ]
 
     return {
         "suggestions":  [_suggestion_result(songs[i], sc) for i, sc in scored["suggestions"]],

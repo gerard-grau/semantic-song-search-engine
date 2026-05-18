@@ -55,6 +55,14 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
   // songs by this exact artist name via a Qdrant payload filter.
   const [artistFilter, setArtistFilter] = useState(null)
   const artistFilterRef = useRef(null)
+  const [suggestionMode, setSuggestionMode] = useState('all')
+
+  function handleModeChange(id) {
+    setSuggestionMode(id)
+    suggestionModeRef.current = id
+    lastTriggeredRef.current = ''
+    doSuggestionSearch(latestQueryRef.current)
+  }
 
   const debounceRef = useRef(null)
   const inputRef = useRef(null)
@@ -115,6 +123,9 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
   // without needing to be recreated on every artistFilter state change.
   useEffect(() => { artistFilterRef.current = artistFilter }, [artistFilter])
 
+  const suggestionModeRef = useRef('all')
+  useEffect(() => { suggestionModeRef.current = suggestionMode }, [suggestionMode])
+
   const doSuggestionSearch = useCallback(async (q, forceArtistFilter) => {
     if (!q) return
     const reqId = ++suggestReqRef.current
@@ -124,21 +135,21 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     setIsSuggesting(true)
     setSuggestions(null)
     setLyricsExtra([])
-    setGroupExtra(null)
+    setGroupExtra([])
     try {
       const excludeIds    = (latestResultsRef.current?.cancons || []).map(c => c.id)
       const excludeGroups = (latestResultsRef.current?.grups   || []).map(g => g.name)
-      const data = await cercadorSuggestions(q, excludeIds, excludeGroups, activeFilter)
+      const data = await cercadorSuggestions(q, excludeIds, excludeGroups, activeFilter, suggestionModeRef.current)
       if (reqId !== suggestReqRef.current) return
       setSuggestions(data.suggestions || [])
       setLyricsExtra(data.lyrics_extra || [])
-      setGroupExtra(data.group_extra || null)
+      setGroupExtra(Array.isArray(data.group_extra) ? data.group_extra : (data.group_extra ? [data.group_extra] : []))
     } catch (err) {
       console.error('Suggestion error:', err)
       if (reqId === suggestReqRef.current) {
         setSuggestions([])
         setLyricsExtra([])
-        setGroupExtra(null)
+        setGroupExtra([])
       }
     } finally {
       if (reqId === suggestReqRef.current) {
@@ -174,7 +185,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
       lastTriggeredRef.current = ''
       setSuggestions(null)
       setLyricsExtra([])
-      setGroupExtra(null)
+      setGroupExtra([])
       setIsSuggesting(false)
       return
     }
@@ -208,7 +219,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     setResults(null)
     setSuggestions(null)
     setLyricsExtra([])
-    setGroupExtra(null)
+    setGroupExtra([])
     setIsSuggesting(false)
     setArtistFilter(null)
     inputRef.current?.focus()
@@ -238,9 +249,19 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     maybeFireSuggestion(corrected)
   }
 
-  const grups = results?.grups || []
-  const cancons = results?.cancons || []
+  const grupsRaw = results?.grups || []
+  const canconsRaw = results?.cancons || []
   const noticies = results?.noticies || []
+
+  // When an artist filter is active, restrict the lexical results to that
+  // artist too — otherwise the keyword columns show unfiltered results while
+  // the embedding columns are filtered, making the filter look broken.
+  const grups   = artistFilter
+    ? grupsRaw.filter(g => g.name === artistFilter)
+    : grupsRaw
+  const cancons = artistFilter
+    ? canconsRaw.filter(s => s.artist === artistFilter)
+    : canconsRaw
 
   // Append lyrics_extra to cancons, deduplicating by id. Extras stay
   // tagged via the `_embedding` flag so the UI can mark them and show
@@ -251,14 +272,14 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     .map(s => ({ ...s, _embedding: true }))
   const lletresCombined = [...cancons, ...extraTagged]
 
-  // Append the embedding-suggested group at the end of the Grups list,
-  // marked _embedding so the UI can flag it. The backend already excludes
+  // Append the embedding-suggested groups at the end of the Grups list,
+  // marked _embedding so the UI can flag them. The backend already excludes
   // groups that are in the lexical results, so a dupe-by-name check here
   // is belt-and-braces only.
   const grupsNames = new Set(grups.map(g => g.name))
-  const grupExtraTagged = (groupExtra && !grupsNames.has(groupExtra.name))
-    ? [{ ...groupExtra, _embedding: true }]
-    : []
+  const grupExtraTagged = (groupExtra || [])
+    .filter(g => !grupsNames.has(g.name))
+    .map(g => ({ ...g, _embedding: true }))
   const grupsCombined = [...grups, ...grupExtraTagged]
 
   const hasResults = grupsCombined.length > 0 || lletresCombined.length > 0 || noticies.length > 0
@@ -454,6 +475,34 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                           {grups.length >= 5 && (
                             <div className="cercador-more">Veure'n més →</div>
                           )}
+                        </div>
+                      )}
+
+                      {showDropdown && (
+                        <div className="cercador-mode-wrap">
+                          <div className="cercador-mode-seg">
+                            {[
+                              { id: 'qualitative', label: 'Temàtica', title: 'Descripció qualitativa (Qdrant)' },
+                              { id: 'all',         label: 'Combinat', title: 'Qualitativa + lletres (Qdrant)' },
+                              { id: 'lyrics',      label: 'Literal',  title: 'Chunking de lletres (Qdrant)' },
+                            ].map(m => (
+                              <button
+                                key={m.id}
+                                className={'cercador-mode-seg-btn' + (suggestionMode === m.id ? ' active' : '')}
+                                title={m.title}
+                                onClick={() => handleModeChange(m.id)}
+                              >
+                                {m.label}
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            className={'cercador-mode-matrix' + (suggestionMode === 'matrix' ? ' active' : '')}
+                            title="Multi-camp top-5000 (sense Qdrant)"
+                            onClick={() => handleModeChange('matrix')}
+                          >
+                            Matriu
+                          </button>
                         </div>
                       )}
 

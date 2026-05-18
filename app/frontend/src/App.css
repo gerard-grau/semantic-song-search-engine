@@ -2099,6 +2099,74 @@
 }
 .cercador-artist-filter-clear:hover { color: var(--brand); }
 
+/* ── Mode selector (dev testing) ───────────────────────────────────────────── */
+.cercador-mode-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+}
+
+.cercador-mode-seg {
+  display: flex;
+  flex: 1;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border-radius: 10px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.cercador-mode-seg-btn {
+  flex: 1;
+  padding: 5px 6px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-mute);
+  font-size: 0.7rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease),
+              color var(--t-fast) var(--ease),
+              box-shadow var(--t-fast) var(--ease);
+  text-align: center;
+  white-space: nowrap;
+}
+.cercador-mode-seg-btn:hover {
+  color: var(--ink);
+}
+.cercador-mode-seg-btn.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.13);
+}
+
+.cercador-mode-matrix {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 4px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+}
+.cercador-mode-matrix:hover {
+  color: var(--brand);
+  border-color: var(--brand);
+}
+.cercador-mode-matrix.active {
+  color: var(--brand);
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+}
+
 /* ── "Filtrar" button inside grup rows ─────────────────────────────────────── */
 .cercador-filter-btn {
   margin-left: auto;
