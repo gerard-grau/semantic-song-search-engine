@@ -76,7 +76,7 @@ export default function HelpPage({ onClose }) {
         >
           <p>
             Clica un gènere a la llegenda i només quedaran cançons d'aquell
-            gènere. <strong>Plain click</strong> selecciona només aquest;{' '}
+            gènere. Un <strong>clic simple</strong> selecciona només aquest;{' '}
             <Kbd>Ctrl</Kbd>/<Kbd>⌘</Kbd>-clic n'afegeix més d'un. No genera
             cap chip: la selecció es mostra a la pròpia llegenda
             (l'element activat es ressalta).
@@ -256,7 +256,7 @@ export default function HelpPage({ onClose }) {
         >
           <p>
             Si saps el grup, el títol o un tros de lletra exacte, ves al{' '}
-            <strong>Cercador</strong> (botó del header). Té correcció
+            <strong>Cercador</strong> (botó de la capçalera). Té correcció
             ortogràfica i resultats en temps real per cada tecla:
             <em> grups, lletres i notícies</em> alhora.
           </p>
@@ -280,10 +280,10 @@ export default function HelpPage({ onClose }) {
         >
           <ul className="help-tips">
             <li>El comptador <strong>"N / 5000 cançons"</strong> dalt a la dreta s'actualitza amb cada filtre.</li>
-            <li>El botó <strong>Reset</strong> a la barra de cerca esborra tots els filtres d'un cop.</li>
+            <li>El botó <strong>Reinicia</strong> a la barra de cerca esborra tots els filtres d'un cop.</li>
             <li>Si poses un chip <strong>similars a "X"</strong>, X apareix al mapa com un <strong>diamant</strong>, no com un punt.</li>
             <li>La barra ressalta sempre l'<strong>últim filtre afegit</strong> al títol dels resultats.</li>
-            <li>Tot funciona també en <strong>fosc</strong>: prem el toggle del header.</li>
+            <li>Tot funciona també en <strong>fosc</strong>: prem el commutador de la capçalera.</li>
           </ul>
         </FeatureCard>
 

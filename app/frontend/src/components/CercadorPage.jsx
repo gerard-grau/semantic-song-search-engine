@@ -43,7 +43,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
 
   // Embedding-suggestion pipeline state. `suggestions` is null until the
   // first trigger fires for this query — we use the null marker to hide
-  // the Sugerències section before any embedding call has been made.
+  // the Suggeriments section before any embedding call has been made.
   const [suggestions, setSuggestions] = useState(null)
   const [lyricsExtra, setLyricsExtra] = useState([])
   // Embedding-suggested group (the lexical engine missed it but the artist
@@ -111,7 +111,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
     if (!q) return
     const reqId = ++suggestReqRef.current
     // Reset suggestions to null so the section renders "generant
-    // sugerències" while we wait; lyrics_extra is also cleared so the
+    // suggeriments" while we wait; lyrics_extra is also cleared so the
     // Lletres column doesn't show stale embedding picks under a new query.
     setIsSuggesting(true)
     setSuggestions(null)
@@ -375,7 +375,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                                   {g._embedding && (
                                     <span
                                       className="cercador-embedding-badge"
-                                      title={`Sugerit per similitud d'embedding (${Math.round((g.score || 0) * 100)}% match)`}
+                                      title={`Suggerit per similitud d'embedding (${Math.round((g.score || 0) * 100)}% coincidència)`}
                                     >
                                       ✦
                                     </span>
@@ -388,7 +388,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                               </div>
                               <span className="cercador-grup-meta">
                                 {g._embedding
-                                  ? <em>Sugerit · {Math.round((g.score || 0) * 100)}% match</em>
+                                  ? <em>Suggerit · {Math.round((g.score || 0) * 100)}% coincidència</em>
                                   : <>
                                       {g.song_count} {g.song_count === 1 ? 'cançó' : 'cançons'}
                                       {g.municipi && <> · {g.municipi}</>}
@@ -405,11 +405,11 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
 
                       {showSuggestions && (
                         <div className="cercador-section cercador-section--suggestions">
-                          <h3 className="cercador-section-title">Sugerències</h3>
+                          <h3 className="cercador-section-title">Suggeriments</h3>
                           {isSuggesting ? (
                             <div className="cercador-loading cercador-loading--inline">
                               <span className="cercador-loading-dot" />
-                              Generant sugerències…
+                              Generant suggeriments…
                             </div>
                           ) : (
                             suggestions.map((s) => (

@@ -85,10 +85,19 @@ export default function TopResults({
     setCustomCount('')
   }
 
+  const [customError, setCustomError] = useState(null)
   function handleCustomSubmit(e) {
     e.preventDefault()
     const n = parseInt(customCount, 10)
-    if (!Number.isFinite(n) || n <= 0) return
+    if (!Number.isFinite(n) || n <= 0) {
+      setCustomError('Introdueix un número més gran que 0.')
+      return
+    }
+    if (n > songs.length) {
+      setCustomError(`Només hi ha ${songs.length} resultats disponibles.`)
+      return
+    }
+    setCustomError(null)
     handleExport(n)
   }
 
@@ -193,16 +202,22 @@ export default function TopResults({
                 </button>
               ))}
             </div>
-            <form className="results-export-custom" onSubmit={handleCustomSubmit}>
+            <form className="results-export-custom" onSubmit={handleCustomSubmit} noValidate>
               <input
-                type="number"
-                min="1"
-                max={songs.length}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 value={customCount}
-                onChange={e => setCustomCount(e.target.value)}
+                onChange={e => {
+                  // Allow only digits; clear stale error as the user types.
+                  const v = e.target.value.replace(/[^0-9]/g, '')
+                  setCustomCount(v)
+                  if (customError) setCustomError(null)
+                }}
                 placeholder={`Núm. concret (1–${songs.length})`}
                 className="results-export-input"
                 autoFocus
+                aria-invalid={customError ? 'true' : 'false'}
               />
               <button
                 type="submit"
@@ -212,6 +227,9 @@ export default function TopResults({
                 Exporta
               </button>
             </form>
+            {customError && (
+              <div className="results-export-error" role="alert">{customError}</div>
+            )}
             <div className="results-export-foot">
               Format CSV · {songs.length} disponibles
             </div>

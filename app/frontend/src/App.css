@@ -600,6 +600,11 @@
   color: var(--ink-mute);
   text-align: right;
 }
+.results-export-error {
+  font-size: var(--t-xs);
+  color: var(--brand);
+  margin-top: 4px;
+}
 
 .results-message {
   display: flex;

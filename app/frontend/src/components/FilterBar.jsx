@@ -64,7 +64,7 @@ export default function FilterBar({
       </button>
       {chips.length > 0 && (
         <button type="button" className="btn-reset" onClick={onReset} disabled={isLoading}>
-          Reset
+          Reinicia
         </button>
       )}
     </form>
