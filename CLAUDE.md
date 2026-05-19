@@ -78,38 +78,56 @@ After warmup, every `/api/filter` call is one encoder forward pass + one matmul 
 
 ### Data pipeline (offline → online)
 
-All offline data generation lives in `data_pipeline/`. The only files
-that must exist before the pipeline runs are:
+All offline data generation lives in `data_pipeline/`. The data directory
+is split into two subfolders:
 
-* `app/backend/data/augmented_songs.csv`     — full song table
-* `app/backend/data/embedded_songs.parquet`  — per-field bge-m3 embeddings
-* `validacio/entrances_exits.csv`            — GA4 popularity export
-* `.env`                                     — MariaDB credentials (optional)
+```
+app/backend/data/
+├── raw/         — external inputs (manual drops + DB dumps)
+└── processed/   — pipeline-derived artefacts (safe to delete & rebuild)
+```
+
+Files that must exist in `raw/` before the pipeline runs:
+
+* `augmented_songs.csv`     — full song table (manual export)
+* `embedded_songs.parquet`  — per-field bge-m3 embeddings
+                              (produced by `ml/embeddings/preembedding.py`)
+
+Plus, outside `app/backend/data/`:
+
+* `validacio/entrances_exits.csv`  — GA4 popularity export
+* `.env`                           — MariaDB credentials (optional)
 
 One command (`python -m data_pipeline.execute_all`) chains the six steps:
 
 ```
-step1_fetch_catalogue_csvs.py   ──▶  cancons.csv, grups.csv, noticies.csv
-    (DB → CSVs; skipped if files already present, warns if DB unreachable)
+step1_fetch_catalogue_csvs.py   ──▶  raw/cancons.csv, raw/grups.csv, raw/noticies.csv
+    (DB → CSVs; skipped if files already present, warns if DB unreachable.
+     These land in raw/ because the content is a DB dump, not a transform.)
 
-step2_build_top_songs.py        ──▶  top_5000_songs.csv  (with genre column)
+step2_build_top_songs.py        ──▶  processed/top_5000_songs.csv  (with genre column)
     (entrances_exits.csv + data_pipeline/_genres.py human-labeled dict)
 
-step3_filter_top5000_embeddings.py  ──▶  embedded_songs_top5000.parquet
+step3_filter_top5000_embeddings.py  ──▶  processed/embedded_songs_top5000.parquet
     (two-pointer alignment over (id_lyrics, artist) → 5000 rows in popularity order)
 
-step4_build_genres_parquet.py   ──▶  embedded_songs_genres.parquet
+step4_build_genres_parquet.py   ──▶  processed/embedded_songs_genres.parquet
     (one-hot per song from the genre column in top_5000_songs.csv)
 
-step5_build_meta.py             ──▶  songs_meta.parquet
+step5_build_meta.py             ──▶  processed/songs_meta.parquet
     (augmented_songs.csv + cancons.csv ⨝ genres parquet)
 
-step6_project_2d.py             ──▶  embedded_songs_2d.parquet
+step6_project_2d.py             ──▶  processed/embedded_songs_2d.parquet
     (UMAP/t-SNE, optionally genre-augmented)
 ```
 
-`app/backend/data/` is gitignored — all parquets/CSVs except the two
-inputs above are generated locally by `execute_all`.
+Path constants live in `data_pipeline/_paths.py` (`RAW_DIR`, `PROCESSED_DIR`)
+and are mirrored in `app/backend/core/data_loader.py` and
+`app/backend/core/cercador_index.py`. `app/backend/data/` is gitignored —
+the entire `raw/` and `processed/` trees are local-only.
+
+There is no top-level `data/` directory; everything data-related lives
+under `app/backend/data/`.
 
 **Genres.** The taxonomy is six labels — `folk`, `cançó autor`,
 `pop-rock`, `rumba`, `havanera`, `música urbana` — listed in
