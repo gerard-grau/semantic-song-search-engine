@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Semantic search engine for Catalan songs (Viasona catalog). Users type natural-language queries; the app filters the catalog progressively by cosine similarity over multi-field embeddings, visualizing the active set on a 2D map.
 
-Two parallel search experiences live in the same FastAPI app:
-- **Descobridor** — semantic, embedding-based. Endpoints: `GET /api/songs`, `GET /api/songs/{song_id}`, `POST /api/filter`, `POST /api/neighbors`.
-- **Cercador** — instant text search with typo correction over songs/groups/news. Endpoints: `GET /api/cercador` (lexical), `GET /api/cercador/suggestions` (embedding-based extras).
+Two parallel search experiences live in the same FastAPI app, each served by its own router under `app/backend/api/routes/`:
+- **Descobridor** (`routes/search.py`) — semantic, embedding-based. Endpoints: `GET /api/songs`, `GET /api/songs/{song_id}`, `POST /api/filter`, `POST /api/neighbors`.
+- **Cercador** (`routes/cercador.py`) — instant text search with typo correction over songs/groups/news. Endpoints: `GET /api/cercador` (lexical), `GET /api/cercador/suggestions` (embedding-based extras).
 
 Existing technical documentation (in Catalan) lives in `Documentacio/01_visio_general.md` … `Documentacio/05_searchoptimal.md`. Parts of it are stale on a few specifics — when in doubt about model/dims/file layout, trust the source files listed below.
 
@@ -170,13 +170,13 @@ Design notes:
 
 `data_pipeline.step6_project_2d` builds layout vectors as `concat(unit(text), alpha_genre * unit(genre_profile))` so songs cluster by genre. With both halves unit-norm, `alpha_genre² / (1 + alpha_genre²)` is genre's share of squared distance. Default `alpha_genre=2.0` ≈ 80% genre / 20% text. CLI flags: `--genre-mode {soft,onehot,none}`, `--alpha-genre`, `--method {umap,tsne,pca_umap}`, `--pca-dim`.
 
-### `searchoptimal/parser2.py` and `core/cercador_index.py`
+### `core/parser2.py` and `core/cercador_index.py`
 
 The cercador (instant search) has its own pipeline disjoint from embeddings:
-- `searchoptimal/parser2.py` — Damerau-Levenshtein with QWERTY-aware substitution costs + `wordfreq` Zipf priors. Produces `{word: probability}` bags for queries.
+- `app/backend/core/parser2.py` — Damerau-Levenshtein with QWERTY-aware substitution costs + `wordfreq` Zipf priors. Produces `{word: probability}` bags for queries. All tunables (`COST_*`, `DECAY`, `SOFTMAX_T`, `MAX_WORD_DISTANCE`, …) are re-exported from the **top-level `config.py`** — edit that file, not `parser2.py`, when tuning.
 - `app/backend/core/cercador_index.py` — inverted indices over `cancons.csv`, `grups.csv`, `noticies.csv`. Built once on first request; prewarmed in background after the embedding model loads.
 
-The original `searchoptimal/parser.py` (tier-based, uses `symspellpy`) is **not** currently wired in — `cercador_index.py` imports `parser2`.
+The entire top-level `searchoptimal/` directory (both `parser.py` and `parser2.py`) is **legacy** and not imported by the active path — the live parser is `app/backend/core/parser2.py`.
 
 ### Frontend filter composition
 
@@ -202,6 +202,9 @@ Removing any chip re-runs the remaining chips from scratch (no partial cache). S
 The following exist but aren't imported anywhere in the active path:
 - `app/backend/core/get_songs.py` — old DB getter with hardcoded credentials and mojibake.
 - `app/backend/core/retrieval_functions.py` — old `id2emb` helpers.
-- `app/frontend/src/components/SearchBar.jsx`, `SongShowcase.jsx` — not referenced from `App.jsx`.
-- `searchoptimal/parser.py` (the tier-based one) — `cercador_index.py` uses `parser2.py` instead.
+- `app/backend/core/catalog.py` — seed list of well-known songs/artists; no live importer.
+- `app/backend/core/searcher.py` — earlier monolithic search class; superseded by `cercador_index.py` + `routes/cercador.py`. It imports `parser2` but nothing imports it.
+- `app/frontend/src/components/SearchBar.jsx`, `SongShowcase.jsx` — not referenced from `App.jsx` (the active page components are `WelcomePage`, `CercadorPage`, `FilterBar`, `TopResults`, `SongDetail`, `HelpPage`, `ThemeToggle`, and `visualizations/Scatter2D`).
+- The entire `searchoptimal/` top-level directory — superseded by `app/backend/core/parser2.py`.
+- Top-level `test_parser2.py` and `test_queries.py` — ad-hoc scripts, not part of any test runner.
 - Multiple `README_*.md` at the repo root (BERNAT, 2, CERCADOR, DATA, WINDOWS, SEARCHER) — older drafts. Authoritative docs are `Documentacio/` and `README_LINUX.md` (Linux/Mac setup) / `README_WINDOWS.md` (Windows setup).
