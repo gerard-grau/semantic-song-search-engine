@@ -55,16 +55,7 @@ node_modules/
 app/frontend/dist/
 app/frontend/.vite/
 
-# AI Code Editors
-.omg*
-
-conductor
-
-app/backend/data/noticies.csv
-app/backend/data/grups.csv
-app/backend/data/cancons.csv
-app/backend/data/augmented_songs.csv
-app/backend/data/embedded_songs.parquet
-app/backend/data/embedded_songs_2d.parquet
+app/backend/data/raw/
+app/backend/data/processed/
 app/backend/data/*
 claude_start.sh

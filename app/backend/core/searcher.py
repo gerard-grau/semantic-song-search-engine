@@ -40,9 +40,10 @@ logger = logging.getLogger(__name__)
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_CANCONS  = _DATA_DIR / "cancons.csv"
-_GRUPS    = _DATA_DIR / "grups.csv"
-_NOTICIES = _DATA_DIR / "noticies.csv"
+_RAW_DIR  = _DATA_DIR / "raw"
+_CANCONS  = _RAW_DIR / "cancons.csv"
+_GRUPS    = _RAW_DIR / "grups.csv"
+_NOTICIES = _RAW_DIR / "noticies.csv"
 
 # Pesos per camp dins de cada dataset. Un hit al títol / nom val més que
 # un hit al cos del text. Multiplica la probabilitat retornada pel parser.

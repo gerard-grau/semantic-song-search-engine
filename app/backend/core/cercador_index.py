@@ -46,8 +46,9 @@ from app.backend.core.parser2 import (
 logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(__file__).parent.parent / "data"
-_NOTICIES = _DATA_DIR / "noticies.csv"
-_GRUPS    = _DATA_DIR / "grups.csv"
+_RAW_DIR  = _DATA_DIR / "raw"
+_NOTICIES = _RAW_DIR / "noticies.csv"
+_GRUPS    = _RAW_DIR / "grups.csv"
 
 
 # Catalan stopwords that carry no retrieval signal — they would otherwise
