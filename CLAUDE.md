@@ -92,11 +92,14 @@ Files that must exist in `raw/` before the pipeline runs:
 * `augmented_songs.csv`     — full song table (manual export)
 * `embedded_songs.parquet`  — per-field bge-m3 embeddings
                               (produced by `ml/embeddings/preembedding.py`)
+* `entrances_exits.csv`     — GA4 popularity export
 
 Plus, outside `app/backend/data/`:
 
-* `validacio/entrances_exits.csv`  — GA4 popularity export
-* `.env`                           — MariaDB credentials (optional)
+* `.env`                    — MariaDB credentials (optional)
+
+`validacio/` holds data-exploration artefacts only (`filter.ipynb` and its
+chart PNGs); no raw data lives there.
 
 One command (`python -m data_pipeline.execute_all`) chains the six steps:
 

@@ -1,13 +1,17 @@
 """
 Single entry point — run every step of the data pipeline.
 
-Inputs required in ``app/backend/data/``:
+Inputs required in ``app/backend/data/raw/``:
   * augmented_songs.csv
   * embedded_songs.parquet
+  * entrances_exits.csv
 
 Inputs required at the repo root:
-  * validacio/entrances_exits.csv
   * .env (optional, but recommended — needed to refresh cancons/grups/noticies.csv)
+
+Outputs are written into ``app/backend/data/processed/`` (plus
+``cancons/grups/noticies.csv`` which step1 places in ``raw/`` because the
+content is a DB dump rather than a pipeline-computed artefact).
 
 After this script runs successfully you can launch the API with
 ``uvicorn app.backend.api.main:app`` and everything will be served from
