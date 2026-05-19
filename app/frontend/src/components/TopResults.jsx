@@ -326,9 +326,6 @@ export default function TopResults({
           </div>
           <ul className="result-score-breakdown-list">
             {breakdownRows(breakdown.songId).map(item => {
-              // Genre chips are binary — show a checkmark, not a percentage.
-              // A score % only makes sense for ranking chips (query/similar).
-              const isGenre = item.kind === 'genre'
               const pct = item.score != null ? Math.round(item.score * 100) : null
               return (
                 <li key={item.key} className="result-score-breakdown-row">
@@ -340,9 +337,9 @@ export default function TopResults({
                   </span>
                   <span
                     className="result-score-breakdown-val"
-                    style={!isGenre && pct != null ? { color: scoreColor(pct) } : undefined}
+                    style={pct != null ? { color: scoreColor(pct) } : undefined}
                   >
-                    {isGenre ? '✓' : (pct != null ? `${pct}%` : '—')}
+                    {pct != null ? `${pct}%` : '—'}
                   </span>
                 </li>
               )
