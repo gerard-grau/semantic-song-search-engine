@@ -51,6 +51,9 @@ _RETRY_INTERVAL: float = 30.0
 _client = None
 _last_attempt: float = 0.0
 _text_index_ensured: bool = False
+# True once we confirm songs_qualitative has named vectors (embedded_title,
+# embedded_qualitative_description). False = old single unnamed-vector schema.
+_qualitative_named_vectors: bool = False
 
 _CE_MODEL_NAME = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 _cross_encoder = None
@@ -75,6 +78,7 @@ def _get_client():
         _client = c
         logger.info("Connected to Qdrant at %s:%s", QDRANT_HOST, QDRANT_PORT)
         _ensure_text_index(c)
+        _detect_qualitative_schema(c)
         return _client
     except Exception as exc:
         logger.debug("Qdrant unavailable: %s", exc)
@@ -82,8 +86,26 @@ def _get_client():
 
 
 def _drop_client() -> None:
-    global _client
+    global _client, _qualitative_named_vectors
     _client = None
+    _qualitative_named_vectors = False
+
+
+def _detect_qualitative_schema(client) -> None:
+    """Check whether songs_qualitative uses named or unnamed vectors and cache the result."""
+    global _qualitative_named_vectors
+    try:
+        info = client.get_collection(QUALITATIVE_COLLECTION)
+        cfg = info.config.params.vectors
+        # Named-vector collections expose a dict; unnamed expose a single VectorParams.
+        _qualitative_named_vectors = isinstance(cfg, dict)
+        logger.info(
+            "songs_qualitative schema: %s",
+            "named vectors" if _qualitative_named_vectors else "single unnamed vector (legacy)",
+        )
+    except Exception as exc:
+        logger.debug("Could not detect qualitative schema: %s", exc)
+        _qualitative_named_vectors = False
 
 
 def _get_cross_encoder():
@@ -351,16 +373,18 @@ def search_qualitative(
     threshold = 0.0 if artist_filter else _SCORE_THRESHOLD
     try:
         from qdrant_client.models import SearchParams
-        result = client.query_points(
+        kwargs: dict = dict(
             collection_name=QUALITATIVE_COLLECTION,
             query=query_vec,
-            using="embedded_qualitative_description",
             limit=fetch,
             query_filter=_payload_filter(artist_filter),
             with_payload=True,
             score_threshold=threshold,
             search_params=SearchParams(exact=True),
         )
+        if _qualitative_named_vectors:
+            kwargs["using"] = "embedded_qualitative_description"
+        result = client.query_points(**kwargs)
     except Exception as exc:
         logger.warning("Qdrant qualitative search error: %s", exc)
         _drop_client()
@@ -399,6 +423,11 @@ def search_by_title(
     client = _get_client()
     if client is None:
         return None
+
+    if not _qualitative_named_vectors:
+        # Old schema has no separate title vector — fall back to qualitative search.
+        logger.debug("Title search: named vectors not available, falling back to qualitative")
+        return search_qualitative(query_vec, limit=limit, artist_filter=artist_filter, exclude_ids=exclude_ids)
 
     fetch = limit + (len(exclude_ids) if exclude_ids else 0) + 5
     threshold = 0.0 if artist_filter else _SCORE_THRESHOLD
