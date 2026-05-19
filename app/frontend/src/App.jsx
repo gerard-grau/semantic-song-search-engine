@@ -338,7 +338,6 @@ export default function App() {
               focalId={focalSimilarId}
               highlightedId={highlightedId}
               onPointHover={setHighlightedId}
-              onPointSearchSimilar={handleAddSimilarChip}
               onPointOpenDetail={handleOpenDetail}
               onAddGenreChip={handleAddGenreChip}
               activeGenres={
@@ -353,7 +352,11 @@ export default function App() {
         </section>
       </main>
 
-      <SongDetail songId={selectedSongId} onClose={() => setSelectedSongId(null)} />
+      <SongDetail
+        songId={selectedSongId}
+        onClose={() => setSelectedSongId(null)}
+        onFilterSimilar={handleAddSimilarChip}
+      />
     </div>
   )
 }

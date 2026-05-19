@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { fetchSongDetail } from '../api/client'
 import { GENRE_COLORS } from './visualizations/genreColors'
 
-export default function SongDetail({ songId, onClose }) {
+export default function SongDetail({ songId, onClose, onFilterSimilar }) {
   const [song, setSong] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -16,6 +16,12 @@ export default function SongDetail({ songId, onClose }) {
   }, [songId])
 
   if (!songId) return null
+
+  function handleSimilar() {
+    if (!song || !onFilterSimilar) return
+    onFilterSimilar(song.id, song.title)
+    onClose?.()
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -31,8 +37,37 @@ export default function SongDetail({ songId, onClose }) {
         ) : song ? (
           <>
             <div className="modal-header">
-              <h2 className="modal-title">{song.title}</h2>
-              <span className="modal-artist">{song.artist}</span>
+              <div className="modal-header-text">
+                <h2 className="modal-title">{song.title}</h2>
+                <span className="modal-artist">{song.artist}</span>
+              </div>
+              <div className="modal-header-actions">
+                {onFilterSimilar && (
+                  <button
+                    type="button"
+                    className="modal-action modal-action--similar"
+                    onClick={handleSimilar}
+                    title="Filtra el mapa per cançons semblants a aquesta"
+                  >
+                    <span aria-hidden="true">≈</span>
+                    Cerca similars
+                  </button>
+                )}
+                {song.url && (
+                  <a
+                    href={song.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="modal-action modal-action--viasona"
+                    title="Obre aquesta cançó a Viasona"
+                  >
+                    Veure a Viasona
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M7 17 17 7M9 7h8v8" />
+                    </svg>
+                  </a>
+                )}
+              </div>
             </div>
 
             <div className="modal-meta">
@@ -51,15 +86,6 @@ export default function SongDetail({ songId, onClose }) {
               <h3>Lletra</h3>
               <pre>{song.full_lyrics}</pre>
             </div>
-
-            {song.url && (
-              <a href={song.url} target="_blank" rel="noopener noreferrer" className="modal-link">
-                Veure a Viasona
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M7 17 17 7M9 7h8v8" />
-                </svg>
-              </a>
-            )}
           </>
         ) : (
           <div className="modal-loading">No s'ha trobat la cançó.</div>

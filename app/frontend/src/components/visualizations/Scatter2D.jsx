@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useCallback } from 'react'
 import { genreColor, GENRE_COLORS } from './genreColors'
 
 /**
@@ -6,12 +6,12 @@ import { genreColor, GENRE_COLORS } from './genreColors'
  *
  * All songs are always visible. Filtered-out items lose their genre colour
  * (rendered as a muted grey) and fade to low opacity; matched items keep the
- * genre colour at full opacity. A click on a point opens a small in-canvas
- * popover with "Cerca similars" / "Veure detall" actions.
+ * genre colour at full opacity. A click on a point opens the song detail
+ * modal directly; the "Cerca similars" action now lives inside that modal.
  */
 export default function Scatter2D({
   points, activeIds, focalId,
-  highlightedId, onPointHover, onPointSearchSimilar, onPointOpenDetail,
+  highlightedId, onPointHover, onPointOpenDetail,
   // Legend doubles as the genre filter: clicking an item toggles a genre
   // chip in the parent's chip list. ``activeGenres`` is the list of slugs
   // currently in the genre chip (length 0 if no genre filter is active);
@@ -27,9 +27,6 @@ export default function Scatter2D({
   const dragRef = useRef({ dragging: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0, moved: false })
   const initedRef = useRef(false)
   const drawRef = useRef(null)
-
-  // Popover state — opens on point click, anchored to the point in screen space.
-  const [popover, setPopover] = useState(null) // { id, x, y, title, artist }
 
   const getBaseTransform = useCallback((w, h, pts) => {
     if (!pts.length) return { scale: 1, offsetX: 0, offsetY: 0 }
@@ -238,17 +235,6 @@ export default function Scatter2D({
 
   useEffect(() => {
     initedRef.current = false
-    setPopover(null)
-  }, [points])
-
-  // Re-anchor the popover when the view changes (zoom/pan/resize).
-  useEffect(() => {
-    if (!popover) return
-    const p = points.find(pt => pt.id === popover.id)
-    if (!p) { setPopover(null); return }
-    const { x, y } = pointToScreen(p, baseTransformRef.current)
-    setPopover(prev => prev && (prev.x === x && prev.y === y ? prev : { ...prev, x, y }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points])
 
   useEffect(() => {
@@ -285,7 +271,6 @@ export default function Scatter2D({
       const dy = e.clientY - dragRef.current.startY
       if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
         dragRef.current.moved = true
-        if (popover) setPopover(null)
       }
       viewRef.current.panX = dragRef.current.startPanX + dx
       viewRef.current.panY = dragRef.current.startPanY + dy
@@ -301,6 +286,9 @@ export default function Scatter2D({
   }
 
   function handleMouseDown(e) {
+    // Only react to the primary button — right/middle clicks shouldn't
+    // start a drag and shouldn't trigger a click on mouseup.
+    if (e.button !== 0) return
     dragRef.current = {
       dragging: true,
       startX: e.clientX,
@@ -312,6 +300,7 @@ export default function Scatter2D({
   }
 
   function handleMouseUp(e) {
+    if (e.button !== 0) return
     const wasDragging = dragRef.current.dragging
     const moved = dragRef.current.moved
     dragRef.current.dragging = false
@@ -325,19 +314,8 @@ export default function Scatter2D({
     const mx = e.clientX - rect.left
     const my = e.clientY - rect.top
     const closest = findClosestPoint(mx, my)
-    if (!closest) {
-      setPopover(null)
-      return
-    }
-
-    const sp = getScreenPos(closest)
-    setPopover({
-      id: closest.id,
-      x: sp.x,
-      y: sp.y,
-      title: closest.title,
-      artist: closest.artist,
-    })
+    if (!closest) return
+    onPointOpenDetail?.(closest.id)
   }
 
   function handleWheel(e) {
@@ -355,11 +333,13 @@ export default function Scatter2D({
     viewRef.current.zoom = newZoom
     viewRef.current.panX = mx - worldX * newZoom
     viewRef.current.panY = my - worldY * newZoom
-    if (popover) setPopover(null)
     draw()
   }
 
-  function closePopover() { setPopover(null) }
+  // Cursor: 'pointer' when hovering a point (it's clickable),
+  // otherwise the CSS default of 'grab' applies — and ``.viz-canvas:active``
+  // already handles the 'grabbing' state while a drag is in flight.
+  const cursor = highlightedId != null ? 'pointer' : undefined
 
   return (
     <div className="viz-container" ref={containerRef}>
@@ -371,47 +351,9 @@ export default function Scatter2D({
         onMouseUp={handleMouseUp}
         onMouseLeave={() => { dragRef.current.dragging = false; onPointHover(null) }}
         onWheel={handleWheel}
-        style={{ cursor: dragRef.current?.dragging ? 'grabbing' : 'grab' }}
+        onContextMenu={e => e.preventDefault()}
+        style={{ cursor }}
       />
-      {popover && (
-        <div
-          className="viz-popover"
-          style={{ left: popover.x, top: popover.y }}
-          onMouseDown={e => e.stopPropagation()}
-        >
-          <div className="viz-popover-header">
-            <div className="viz-popover-title" title={popover.title}>{popover.title}</div>
-            <div className="viz-popover-artist" title={popover.artist}>{popover.artist}</div>
-          </div>
-          <div className="viz-popover-actions">
-            <button
-              className="viz-popover-btn viz-popover-btn--primary"
-              onClick={() => {
-                onPointSearchSimilar?.(popover.id, popover.title)
-                closePopover()
-              }}
-            >
-              Cerca similars
-            </button>
-            <button
-              className="viz-popover-btn"
-              onClick={() => {
-                onPointOpenDetail?.(popover.id)
-                closePopover()
-              }}
-            >
-              Veure detall
-            </button>
-            <button
-              className="viz-popover-btn viz-popover-btn--close"
-              onClick={closePopover}
-              aria-label="Tanca"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      )}
       <div className="viz-legend" role="group" aria-label="Filtra per gènere (Ctrl/⌘-clic per a múltiples)">
         {Object.entries(GENRE_COLORS).map(([g, c]) => {
           const isActive = activeGenres.includes(g)
