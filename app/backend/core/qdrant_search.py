@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 QDRANT_HOST = "localhost"
 QDRANT_PORT = 6333
-_TIMEOUT    = 5.0   # seconds per Qdrant request
+_TIMEOUT    = 30.0  # seconds per Qdrant request (exact search on 780k chunks needs headroom)
 
 QUALITATIVE_COLLECTION = "songs_qualitative"
 LYRICS_COLLECTION      = "songs_lyrics_chunks"
