@@ -370,19 +370,25 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
+  gap: 7px;
   height: 34px;
-  border-radius: 50%;
+  padding: 0 14px 0 10px;
+  border-radius: var(--r-pill);
   border: 1px solid var(--line);
   background: transparent;
   color: var(--ink-soft);
+  font-size: var(--t-sm);
+  font-weight: 600;
   transition: all var(--t-fast) var(--ease);
+}
+.header-help-btn-label {
+  letter-spacing: 0.01em;
 }
 .header-help-btn:hover {
   background: var(--brand);
   color: var(--brand-ink);
   border-color: var(--brand);
-  transform: rotate(8deg) scale(1.06);
+  transform: scale(1.03);
 }
 
 /* ---------- Error banner ---------- */
@@ -1646,6 +1652,47 @@
   background: transparent;
   padding: 0;
 }
+.modal-lyrics-hint {
+  font-size: var(--t-xs);
+  color: var(--ink-mute);
+  margin: -4px 0 12px;
+  user-select: none;
+}
+.modal-selectable {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+/* Floating action that follows a text selection inside the song modal.
+   Lets the user turn the selected fragment into a query chip. */
+.selection-action {
+  position: fixed;
+  transform: translate(-50%, 0);
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  animation: selection-pop 140ms var(--ease-spring);
+}
+.selection-action:hover { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+.selection-action span { font-size: 1.05em; line-height: 1; }
+@keyframes selection-pop {
+  from { opacity: 0; transform: translate(-50%, -4px) scale(0.96); }
+  to   { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+[data-theme="dark"] .selection-action { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+[data-theme="dark"] .selection-action:hover { background: var(--brand-hover); border-color: var(--brand-hover); }
 
 /* .modal-link is superseded by .modal-action in the header — kept blank
    so old refs don't crash if something still mounts the old markup. */
@@ -2522,6 +2569,51 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* Help illustration for the "select text → filter" feature. */
+.mock-selection {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 20px 22px 56px;
+}
+.mock-selection-lyrics {
+  font-family: var(--font-display);
+  font-size: 1.02rem;
+  line-height: 1.75;
+  color: var(--ink);
+}
+.mock-selection-highlight {
+  background: var(--selection);
+  border-radius: 3px;
+  padding: 0 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.mock-selection-action {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+}
+[data-theme="dark"] .mock-selection-action {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
 }
 .mock-detail-head {
   display: flex;

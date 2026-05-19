@@ -135,17 +135,48 @@ export default function HelpPage({ onClose }) {
 
         <FeatureCard
           number="04"
+          title="Selecciona text de la lletra"
+          subtitle="Converteix qualsevol fragment en un filtre nou"
+        >
+          <p>
+            Dins la fitxa d'una cançó, <strong>selecciona</strong> un tros
+            de la lletra, del títol o del nom de l'artista (o fes <strong>
+            doble clic</strong> sobre una paraula per seleccionar-la
+            sencera). Apareix una pastilla flotant just sota la selecció:
+            clica-la i el fragment s'afegeix com a chip de cerca. Útil
+            quan llegint la lletra ensopegues amb una imatge o un tema
+            que vols explorar al mapa.
+          </p>
+          <Illustration label="La pastilla apareix sota el text seleccionat; tanca la fitxa i aplica el filtre.">
+            <div className="mock-selection">
+              <div className="mock-selection-lyrics">
+                Si em dius adéu,<br />
+                vull que el dia sigui{' '}
+                <span className="mock-selection-highlight">net i clar</span>,<br />
+                que cap ocell trenqui l'harmonia del seu cant.
+              </div>
+              <div className="mock-selection-action">
+                <span aria-hidden="true">+</span>
+                Afegir «net i clar» com a filtre
+              </div>
+            </div>
+          </Illustration>
+        </FeatureCard>
+
+        <FeatureCard
+          number="05"
           title="Desglossament de puntuació"
           subtitle="Quina cançó encaixa millor amb quin filtre?"
         >
           <p>
-            Quan tens més d'un chip, cada resultat mostra una bolla amb el
-            <strong> percentatge combinat</strong>. Clica-la per obrir un
-            panell amb el percentatge específic de cada filtre — així
-            entens si una cançó passa perquè és perfecta a un dels filtres
-            o perquè és correcta a tots.
+            Cada resultat mostra una bolla amb el <strong>percentatge de
+            similitud</strong>. Clica-la per obrir un panell amb el
+            percentatge de cada filtre per separat — així entens si una
+            cançó passa perquè és perfecta a un dels filtres o perquè és
+            correcta a tots. Funciona també amb un sol chip (és l'única
+            manera de veure el detall sense fer la mitjana).
           </p>
-          <Illustration label="La bolla és clicable quan hi ha 2+ filtres.">
+          <Illustration label="La bolla és clicable sempre que hi hagi com a mínim un filtre.">
             <div className="mock-breakdown">
               <div className="mock-result-card">
                 <div className="mock-result-body">
@@ -170,7 +201,7 @@ export default function HelpPage({ onClose }) {
         </FeatureCard>
 
         <FeatureCard
-          number="05"
+          number="06"
           title="Exporta els top resultats"
           subtitle="Top 10, 50, 100 — o un número concret"
         >
@@ -200,7 +231,7 @@ export default function HelpPage({ onClose }) {
         </FeatureCard>
 
         <FeatureCard
-          number="06"
+          number="07"
           title="Mou-te pel mapa"
           subtitle="Zoom amb la roda · arrossega per moure"
         >
@@ -219,7 +250,7 @@ export default function HelpPage({ onClose }) {
         </FeatureCard>
 
         <FeatureCard
-          number="07"
+          number="08"
           title="Cercador instantani"
           subtitle="Una altra eina: per nom, no per significat"
         >
@@ -243,7 +274,7 @@ export default function HelpPage({ onClose }) {
         </FeatureCard>
 
         <FeatureCard
-          number="08"
+          number="09"
           title="Petits detalls"
           subtitle="Coses que pots provar"
         >

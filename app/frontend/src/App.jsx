@@ -285,6 +285,7 @@ export default function App() {
               <path d="M9.2 9.2a2.8 2.8 0 1 1 3.9 2.6c-.8.4-1.1 1-1.1 2" />
               <circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none" />
             </svg>
+            <span className="header-help-btn-label">Ajuda</span>
           </button>
           <button className="header-link-btn" onClick={() => setPage('cercador')}>Cercador</button>
           <ThemeToggle theme={theme} onToggle={toggleTheme} inline />
@@ -347,6 +348,7 @@ export default function App() {
         songId={selectedSongId}
         onClose={() => setSelectedSongId(null)}
         onFilterSimilar={handleAddSimilarChip}
+        onAddQueryFilter={handleAddChip}
       />
 
       {showHelp && <HelpPage onClose={() => setShowHelp(false)} />}

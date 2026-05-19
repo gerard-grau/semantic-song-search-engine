@@ -85,8 +85,14 @@ export default function Scatter2D({
     const labelInk = cs.getPropertyValue('--ink').trim() || '#15151A'
     const labelMute = cs.getPropertyValue('--ink-soft').trim() || '#5D6D7E'
     // Filtered-out points: softer, lighter — they should recede into the
-    // background so the matched set can be read at a glance.
-    const dimColor = cs.getPropertyValue('--ink-mute').trim() || '#6B6B75'
+    // background so the matched set can be read at a glance. Dark mode
+    // needs a lighter base colour + higher alpha because --ink-mute on
+    // near-black is essentially invisible.
+    const isDark = document.documentElement.dataset.theme === 'dark'
+    const dimColor = isDark
+      ? (cs.getPropertyValue('--ink-soft').trim() || '#B5AFA0')
+      : (cs.getPropertyValue('--ink-mute').trim() || '#6B6B75')
+    const dimAlpha = isDark ? 0.38 : 0.22
 
     function drawDimNode(p) {
       const { x: px, y: py } = pointToScreen(p, bt)
@@ -94,7 +100,7 @@ export default function Scatter2D({
       ctx.beginPath()
       ctx.arc(px, py, r * 0.7, 0, Math.PI * 2)
       ctx.fillStyle = dimColor
-      ctx.globalAlpha = 0.22
+      ctx.globalAlpha = dimAlpha
       ctx.fill()
       ctx.globalAlpha = 1
     }

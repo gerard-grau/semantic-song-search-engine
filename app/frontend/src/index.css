@@ -100,9 +100,9 @@ body {
   --accent-2: #FF7B5A;       /* coral */
   --accent-2-soft: rgba(255, 123, 90, 0.16);
 
-  --line: rgba(236, 231, 220, 0.08);
-  --line-strong: rgba(236, 231, 220, 0.16);
-  --line-faint: rgba(236, 231, 220, 0.04);
+  --line: rgba(236, 231, 220, 0.16);
+  --line-strong: rgba(236, 231, 220, 0.26);
+  --line-faint: rgba(236, 231, 220, 0.08);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.40);
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.40), 0 1px 2px rgba(0, 0, 0, 0.30);

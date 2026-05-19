@@ -11,6 +11,13 @@ function scoreColor(pct) {
   return `hsl(${Math.round(hue)}, 70%, ${Math.round(light)}%)`
 }
 
+// Songs with several albums arrive as "album1|album2|..." — split on "|"
+// and rejoin so the UI shows every album rather than the raw delimiter.
+function formatAlbum(v) {
+  if (!v) return ''
+  return String(v).split('|').map((s) => s.trim()).filter(Boolean).join(', ')
+}
+
 // CSV-escape per RFC 4180: wrap in quotes and double any internal quote
 // whenever the value contains a comma, quote, or newline.
 function csvCell(v) {
@@ -28,7 +35,7 @@ function exportSongsCsv(rows, filename) {
       s.id,
       csvCell(s.title),
       csvCell(s.artist),
-      csvCell(s.album || ''),
+      csvCell(formatAlbum(s.album)),
       s.year || '',
       csvCell(s.genre || ''),
       s.score != null ? s.score.toFixed(4) : '',
@@ -116,7 +123,7 @@ export default function TopResults({
 
   function openBreakdown(e, songId) {
     e.stopPropagation()
-    if (chips.length < 2) return
+    if (chips.length < 1) return
     if (breakdown?.songId === songId) { setBreakdown(null); return }
     const rect = e.currentTarget.getBoundingClientRect()
     setBreakdown({
@@ -220,7 +227,7 @@ export default function TopResults({
           const isActive = highlightedId === song.id
           const scorePct = song.score != null ? Math.round(song.score * 100) : null
           const ringColor = scorePct != null ? scoreColor(scorePct) : null
-          const hasMultiChip = chips.length > 1
+          const hasMultiChip = chips.length >= 1
           return (
             <li
               key={song.id}
@@ -251,7 +258,7 @@ export default function TopResults({
                 <div className="result-artist">{song.artist}</div>
                 {(song.album || song.year) && (
                   <div className="result-meta">
-                    {song.album}
+                    {formatAlbum(song.album)}
                     {song.album && song.year ? ' · ' : ''}
                     {song.year || ''}
                   </div>
@@ -265,9 +272,9 @@ export default function TopResults({
                 <div
                   className={`result-score-wrap${hasMultiChip ? ' result-score-wrap--clickable' : ''}`}
                   aria-label={
-                    hasMultiChip
+                    chips.length > 1
                       ? `Similitud combinada ${scorePct}% (clica per veure el desglossament)`
-                      : `Similitud ${scorePct}%`
+                      : `Similitud ${scorePct}% (clica per veure el desglossament per filtre)`
                   }
                 >
                   <button
