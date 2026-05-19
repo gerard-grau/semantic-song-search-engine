@@ -27,7 +27,7 @@ EMBEDDED_PARQUET = RAW_DIR / "embedded_songs.parquet"
 CANCONS_CSV      = RAW_DIR / "cancons.csv"   # DB dump (step1 just extracts)
 GRUPS_CSV        = RAW_DIR / "grups.csv"     # DB dump
 NOTICIES_CSV     = RAW_DIR / "noticies.csv"  # DB dump
-ENTRANCES_CSV    = REPO_ROOT / "validacio" / "entrances_exits.csv"
+ENTRANCES_CSV    = RAW_DIR / "entrances_exits.csv"   # GA4 export
 
 # Processed outputs — derived artefacts written by steps 2-6.
 TOP5000_CSV     = PROCESSED_DIR / "top_5000_songs.csv"

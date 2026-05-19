@@ -9,10 +9,10 @@ Inputs (must exist in ``app/backend/data/raw/`` before running):
   * ``augmented_songs.csv``       — full song table (manual export)
   * ``embedded_songs.parquet``    — per-field bge-m3 embeddings
                                     (produced by ``ml/embeddings/preembedding.py``)
+  * ``entrances_exits.csv``       — GA4 popularity export
 
   Plus, outside ``app/backend/data/``:
-  * ``validacio/entrances_exits.csv`` — GA4 popularity export
-  * ``.env``                          — MariaDB credentials (optional)
+  * ``.env``                      — MariaDB credentials (optional)
 
 Step 1 also writes to ``app/backend/data/raw/`` because its contents are
 DB dumps rather than computed artefacts:
