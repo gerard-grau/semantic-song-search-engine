@@ -7,10 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Semantic search engine for Catalan songs (Viasona catalog). Users type natural-language queries; the app filters the catalog progressively by cosine similarity over multi-field embeddings, visualizing the active set on a 2D map.
 
 Two parallel search experiences live in the same FastAPI app:
-- **Descobridor** (`/api/songs`, `/api/filter`, `/api/neighbors`) — semantic, embedding-based.
-- **Cercador** (`/api/cercador`) — instant text search with typo correction over songs/groups/news, no embeddings.
+- **Descobridor** — semantic, embedding-based. Endpoints: `GET /api/songs`, `GET /api/songs/{song_id}`, `POST /api/filter`, `POST /api/neighbors`.
+- **Cercador** — instant text search with typo correction over songs/groups/news. Endpoints: `GET /api/cercador` (lexical), `GET /api/cercador/suggestions` (embedding-based extras).
 
-Existing technical documentation (in Catalan) lives in `Documentacio/01_*.md` through `Documentacio/10_*.md`. Parts of it are stale on a few specifics — when in doubt about model/dims/file layout, trust the source files listed below.
+Existing technical documentation (in Catalan) lives in `Documentacio/01_visio_general.md` … `Documentacio/05_searchoptimal.md`. Parts of it are stale on a few specifics — when in doubt about model/dims/file layout, trust the source files listed below.
 
 ## Commands
 
@@ -183,6 +183,4 @@ The following exist but aren't imported anywhere in the active path:
 - `app/backend/core/retrieval_functions.py` — old `id2emb` helpers.
 - `app/frontend/src/components/SearchBar.jsx`, `SongShowcase.jsx` — not referenced from `App.jsx`.
 - `searchoptimal/parser.py` (the tier-based one) — `cercador_index.py` uses `parser2.py` instead.
-- Multiple `README_*.md` at the repo root (BERNAT, 2, CERCADOR, DATA, WINDOWS, LINUX, SEARCHER) — older drafts. Authoritative docs are `Documentacio/` and `README_LINUX.md`.
-
-See `Documentacio/10_codi_mort_i_millores.md` for the cleanup roadmap (if it still exists).
+- Multiple `README_*.md` at the repo root (BERNAT, 2, CERCADOR, DATA, WINDOWS, SEARCHER) — older drafts. Authoritative docs are `Documentacio/` and `README_LINUX.md` (Linux/Mac setup) / `README_WINDOWS.md` (Windows setup).
