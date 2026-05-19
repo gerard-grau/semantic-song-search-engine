@@ -2749,6 +2749,16 @@
   font-size: 0.78rem;
   font-weight: 700;
   color: var(--ink);
+  letter-spacing: -0.02em;
+}
+/* Mirror the real .result-score-label::after so the help illustration shows
+   the same "72%" badge the user sees on each result card. */
+.mock-ring span::after {
+  content: '%';
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: var(--ink-mute);
+  margin-left: 1px;
 }
 .mock-arrow {
   font-size: 1.4rem;
