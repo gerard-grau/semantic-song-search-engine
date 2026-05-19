@@ -234,21 +234,31 @@ def _qdrant_suggestions(
 
     use_qual   = mode in ("all", "qualitative")
     use_lyrics = mode in ("all", "lyrics")
+    use_title  = mode == "title"
 
     qual_results: list[dict] | None = []
     if use_qual:
         qual_results = qdrant_search.search_qualitative(
-            q_vec, limit=10, artist_filter=artist_filter, exclude_ids=excluded_ids,
+            q_vec, limit=7, artist_filter=artist_filter, exclude_ids=excluded_ids,
         )
 
     lyrics_results: list[dict] | None = []
     if use_lyrics:
         lyrics_results = qdrant_search.search_lyrics_chunks(
-            q_vec, limit=10, artist_filter=artist_filter, exclude_ids=excluded_ids,
+            q_vec, limit=7, artist_filter=artist_filter, exclude_ids=excluded_ids,
             query_text=q,
         )
 
-    if qual_results is None or lyrics_results is None:
+    title_results: list[dict] | None = []
+    if use_title:
+        # Title mode doesn't exclude lexical hits — the user explicitly asked
+        # "what's titled X?", so the answer should appear even if Lletres
+        # already has it.
+        title_results = qdrant_search.search_by_title(
+            q_vec, limit=7, artist_filter=artist_filter, exclude_ids=set(),
+        )
+
+    if qual_results is None or lyrics_results is None or title_results is None:
         # Qdrant became unavailable mid-request; fall back to matrix
         return None
 
@@ -270,13 +280,17 @@ def _qdrant_suggestions(
         }
 
     # Route results to the right slots depending on mode:
+    #   "qualitative" → qualitative description → suggestions
+    #   "lyrics"      → lyrics chunks (CE reranked) → suggestions
+    #   "title"       → title embedding → suggestions
     #   "all"         → qualitative → suggestions, lyrics → lyrics_extra
-    #   "lyrics"      → lyrics → suggestions (nothing in lyrics_extra)
-    #   "qualitative" → qualitative → suggestions (nothing in lyrics_extra)
     if mode == "lyrics":
         suggestions  = [_enrich(r) for r in lyrics_results]
         lyrics_extra = []
-    else:
+    elif mode == "title":
+        suggestions  = [_enrich(r) for r in title_results]
+        lyrics_extra = []
+    else:  # "all" or "qualitative"
         suggestions  = [_enrich(r) for r in qual_results]
         lyrics_extra = [_enrich(r) for r in lyrics_results]
 

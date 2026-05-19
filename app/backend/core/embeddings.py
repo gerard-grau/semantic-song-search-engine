@@ -536,13 +536,19 @@ def compute_cercador_suggestions(
                 name = (s.get("artist") or "").strip()
                 if name and name in exclude_artist_names:
                     artist_masked[i] = -np.inf
-        if np.isfinite(artist_masked).any():
-            best = int(np.argmax(artist_masked))
-            best_cos = float(artist_masked[best])
-            if best_cos >= GROUP_SUGGESTION_COSINE_FLOOR:
-                name = (index["songs"][best].get("artist") or "").strip()
-                if name:
-                    group_extra = [(name, best_cos)]
+        # Deduplicate by artist name, then return top-3 above the floor.
+        seen_artists: set[str] = set()
+        songs_meta = index["songs"]
+        for idx in np.argsort(-artist_masked):
+            cos = float(artist_masked[idx])
+            if cos < GROUP_SUGGESTION_COSINE_FLOOR or not np.isfinite(cos):
+                break
+            name = (songs_meta[int(idx)].get("artist") or "").strip()
+            if name and name not in seen_artists:
+                seen_artists.add(name)
+                group_extra.append((name, cos))
+                if len(group_extra) >= 3:
+                    break
 
     return {
         "suggestions":  suggestions,
@@ -594,15 +600,20 @@ def compute_group_extra(
     if not np.isfinite(artist_masked).any():
         return []
 
-    best     = int(np.argmax(artist_masked))
-    best_cos = float(artist_masked[best])
-    if best_cos < GROUP_SUGGESTION_COSINE_FLOOR:
-        return []
-
-    name = ((index.get("songs") or [])[best].get("artist") or "").strip()
-    if not name:
-        return []
-    return [(name, best_cos)]
+    songs_meta = index.get("songs") or []
+    seen_artists: set[str] = set()
+    results: list[tuple[str, float]] = []
+    for idx in np.argsort(-artist_masked):
+        cos = float(artist_masked[idx])
+        if cos < GROUP_SUGGESTION_COSINE_FLOOR or not np.isfinite(cos):
+            break
+        name = (songs_meta[int(idx)].get("artist") or "").strip()
+        if name and name not in seen_artists:
+            seen_artists.add(name)
+            results.append((name, cos))
+            if len(results) >= 3:
+                break
+    return results
 
 
 def _word_overlap_filter_fast(

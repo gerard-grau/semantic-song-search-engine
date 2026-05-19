@@ -354,6 +354,7 @@ def search_qualitative(
         result = client.query_points(
             collection_name=QUALITATIVE_COLLECTION,
             query=query_vec,
+            using="embedded_qualitative_description",
             limit=fetch,
             query_filter=_payload_filter(artist_filter),
             with_payload=True,
@@ -362,6 +363,59 @@ def search_qualitative(
         )
     except Exception as exc:
         logger.warning("Qdrant qualitative search error: %s", exc)
+        _drop_client()
+        return None
+
+    out: list[dict] = []
+    for h in result.points:
+        sid = int(h.payload.get("id_lyrics", 0))
+        if exclude_ids and sid in exclude_ids:
+            continue
+        out.append({
+            "id":             sid,
+            "title":          str(h.payload.get("title",  "")),
+            "artist":         str(h.payload.get("artist", "")),
+            "album":          str(h.payload.get("album",  "")),
+            "lyrics_snippet": "",
+            "score":          round(max(0.0, min(1.0, float(h.score))), 4),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def search_by_title(
+    query_vec: list[float],
+    limit: int = 7,
+    artist_filter: str | None = None,
+    exclude_ids: set[int] | None = None,
+) -> list[dict] | None:
+    """Search the songs_qualitative collection by embedded_title vector.
+
+    Same collection as search_qualitative but queries the embedded_title
+    named vector instead of the description vector. Requires the collection
+    to have been indexed with named vectors (--only-qualitative re-run).
+    """
+    client = _get_client()
+    if client is None:
+        return None
+
+    fetch = limit + (len(exclude_ids) if exclude_ids else 0) + 5
+    threshold = 0.0 if artist_filter else _SCORE_THRESHOLD
+    try:
+        from qdrant_client.models import SearchParams
+        result = client.query_points(
+            collection_name=QUALITATIVE_COLLECTION,
+            query=query_vec,
+            using="embedded_title",
+            limit=fetch,
+            query_filter=_payload_filter(artist_filter),
+            with_payload=True,
+            score_threshold=threshold,
+            search_params=SearchParams(exact=True),
+        )
+    except Exception as exc:
+        logger.warning("Qdrant title search error: %s", exc)
         _drop_client()
         return None
 

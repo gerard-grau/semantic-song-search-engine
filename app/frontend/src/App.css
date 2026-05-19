@@ -2143,29 +2143,6 @@
   box-shadow: 0 1px 4px rgba(0,0,0,0.13);
 }
 
-.cercador-mode-matrix {
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--ink-mute);
-  background: none;
-  border: 1px solid var(--line);
-  border-radius: var(--r-pill);
-  padding: 4px 9px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
-}
-.cercador-mode-matrix:hover {
-  color: var(--brand);
-  border-color: var(--brand);
-}
-.cercador-mode-matrix.active {
-  color: var(--brand);
-  border-color: var(--brand);
-  background: color-mix(in srgb, var(--brand) 10%, transparent);
-}
 
 /* ── "Filtrar" button inside grup rows ─────────────────────────────────────── */
 .cercador-filter-btn {

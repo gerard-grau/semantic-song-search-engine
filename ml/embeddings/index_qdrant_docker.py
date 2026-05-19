@@ -134,7 +134,10 @@ def index_qualitative(client: QdrantClient) -> None:
 
     client.create_collection(
         collection_name=QUALITATIVE_COLLECTION,
-        vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
+        vectors_config={
+            "embedded_qualitative_description": VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
+            "embedded_title":                   VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
+        },
     )
     print(f"  Created '{QUALITATIVE_COLLECTION}'")
 
@@ -157,17 +160,27 @@ def index_qualitative(client: QdrantClient) -> None:
 
         points: list[PointStruct] = []
         for _, row in df.iterrows():
-            vec = row["embedded_qualitative_description"]
-            if vec is None:
+            vec_qual = row["embedded_qualitative_description"]
+            if vec_qual is None:
                 continue
-            if hasattr(vec, "tolist"):
-                vec = vec.tolist()
-            if not isinstance(vec, list) or len(vec) != VECTOR_DIM:
+            if hasattr(vec_qual, "tolist"):
+                vec_qual = vec_qual.tolist()
+            if not isinstance(vec_qual, list) or len(vec_qual) != VECTOR_DIM:
                 continue
+
+            vec_title = row.get("embedded_title")
+            if vec_title is not None and hasattr(vec_title, "tolist"):
+                vec_title = vec_title.tolist()
+            if not isinstance(vec_title, list) or len(vec_title) != VECTOR_DIM:
+                vec_title = vec_qual  # fallback to qualitative if title missing
+
             pid = _gen_id(f"qual_{row['id_lyrics']}_{row['artist']}")
             points.append(PointStruct(
                 id=pid,
-                vector=_normalise(vec),
+                vector={
+                    "embedded_qualitative_description": _normalise(vec_qual),
+                    "embedded_title":                   _normalise(vec_title),
+                },
                 payload={
                     "id_lyrics": int(row["id_lyrics"]),
                     "artist":    str(row["artist"]),

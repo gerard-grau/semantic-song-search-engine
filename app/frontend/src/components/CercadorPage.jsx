@@ -55,7 +55,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
   // songs by this exact artist name via a Qdrant payload filter.
   const [artistFilter, setArtistFilter] = useState(null)
   const artistFilterRef = useRef(null)
-  const [suggestionMode, setSuggestionMode] = useState('all')
+  const [suggestionMode, setSuggestionMode] = useState('qualitative')
 
   function handleModeChange(id) {
     setSuggestionMode(id)
@@ -123,7 +123,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
   // without needing to be recreated on every artistFilter state change.
   useEffect(() => { artistFilterRef.current = artistFilter }, [artistFilter])
 
-  const suggestionModeRef = useRef('all')
+  const suggestionModeRef = useRef('qualitative')
   useEffect(() => { suggestionModeRef.current = suggestionMode }, [suggestionMode])
 
   const doSuggestionSearch = useCallback(async (q, forceArtistFilter) => {
@@ -415,7 +415,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                       {grupsCombined.length > 0 && (
                         <div className="cercador-section cercador-section--grups">
                           <h3 className="cercador-section-title">Grups</h3>
-                          {grupsCombined.map((g, i) => (
+                          {grupsCombined.slice(0, 5).map((g, i) => (
                             <a
                               key={i}
                               className={
@@ -472,7 +472,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                               </span>
                             </a>
                           ))}
-                          {grups.length >= 5 && (
+                          {grupsCombined.length > 5 && (
                             <div className="cercador-more">Veure'n més →</div>
                           )}
                         </div>
@@ -482,9 +482,9 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                         <div className="cercador-mode-wrap">
                           <div className="cercador-mode-seg">
                             {[
-                              { id: 'qualitative', label: 'Temàtica', title: 'Descripció qualitativa (Qdrant)' },
-                              { id: 'all',         label: 'Combinat', title: 'Qualitativa + lletres (Qdrant)' },
-                              { id: 'lyrics',      label: 'Literal',  title: 'Chunking de lletres (Qdrant)' },
+                              { id: 'qualitative', label: 'Temàtica', title: 'Cerca per descripció qualitativa' },
+                              { id: 'lyrics',      label: 'Lletra',   title: 'Cerca per fragments de lletra' },
+                              { id: 'title',       label: 'Títol',    title: 'Cerca per similitud de títol' },
                             ].map(m => (
                               <button
                                 key={m.id}
@@ -496,13 +496,6 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                               </button>
                             ))}
                           </div>
-                          <button
-                            className={'cercador-mode-matrix' + (suggestionMode === 'matrix' ? ' active' : '')}
-                            title="Multi-camp top-5000 (sense Qdrant)"
-                            onClick={() => handleModeChange('matrix')}
-                          >
-                            Matriu
-                          </button>
                         </div>
                       )}
 
