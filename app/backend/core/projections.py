@@ -22,7 +22,8 @@ from app.backend.core.similarity import cosine_matrix
 logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(__file__).parent.parent / "data"
-_PRECOMP_2D = _DATA_DIR / "embedded_songs_2d.parquet"
+_PROCESSED_DIR = _DATA_DIR / "processed"
+_PRECOMP_2D = _PROCESSED_DIR / "embedded_songs_2d.parquet"
 
 # Cache for full-dataset 2D points (computed once, reused on reset).
 _cached_all_2d: list[dict] | None = None
@@ -105,8 +106,8 @@ def get_all_projections_2d() -> list[dict]:
     if _cached_all_2d is None:
         if not _PRECOMP_2D.exists():
             logger.warning(
-                "No 2D parquet at %s. Run `python -m app.backend.core.data_pipeline` "
-                "or start the API with --recompute-2d.",
+                "No 2D parquet at %s. Run `python -m data_pipeline.execute_all` "
+                "or start the API with RECOMPUTE_2D=1.",
                 _PRECOMP_2D,
             )
             _cached_all_2d = []

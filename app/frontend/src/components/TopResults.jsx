@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { GENRE_COLORS } from './visualizations/genreColors'
 
 // Map a similarity percentage to a colour: red (0%) → orange → dark green
@@ -11,6 +11,49 @@ function scoreColor(pct) {
   return `hsl(${Math.round(hue)}, 70%, ${Math.round(light)}%)`
 }
 
+// Songs with several albums arrive as "album1|album2|..." — split on "|"
+// and rejoin so the UI shows every album rather than the raw delimiter.
+function formatAlbum(v) {
+  if (!v) return ''
+  return String(v).split('|').map((s) => s.trim()).filter(Boolean).join(', ')
+}
+
+// CSV-escape per RFC 4180: wrap in quotes and double any internal quote
+// whenever the value contains a comma, quote, or newline.
+function csvCell(v) {
+  if (v == null) return ''
+  const s = String(v)
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+function exportSongsCsv(rows, filename) {
+  const headers = ['rank', 'id', 'title', 'artist', 'album', 'year', 'genre', 'score']
+  const lines = [headers.join(',')]
+  rows.forEach((s, i) => {
+    lines.push([
+      i + 1,
+      s.id,
+      csvCell(s.title),
+      csvCell(s.artist),
+      csvCell(formatAlbum(s.album)),
+      s.year || '',
+      csvCell(s.genre || ''),
+      s.score != null ? s.score.toFixed(4) : '',
+    ].join(','))
+  })
+  // BOM so Excel opens UTF-8 (accents, ç) correctly without the user
+  // having to fiddle with import settings.
+  const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 export default function TopResults({
   songs, message, query,
   chips = [], chipScoreMaps = [],
@@ -21,8 +64,54 @@ export default function TopResults({
   // ring's centre-right edge. Null = closed.
   const [breakdown, setBreakdown] = useState(null)
 
+  // Export menu state
+  const [exportOpen, setExportOpen] = useState(false)
+  const [customCount, setCustomCount] = useState('')
+  const exportRef = useRef(null)
+
   const visible = songs.slice(0, visibleCount)
   const hasMore = songs.length > visibleCount
+
+  function handleExport(n) {
+    const count = Math.max(1, Math.min(songs.length, Math.floor(n)))
+    const rows = songs.slice(0, count)
+    const slug = (query || 'cataleg')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40) || 'cataleg'
+    exportSongsCsv(rows, `top-${count}-${slug}.csv`)
+    setExportOpen(false)
+    setCustomCount('')
+  }
+
+  const [customError, setCustomError] = useState(null)
+  function handleCustomSubmit(e) {
+    e.preventDefault()
+    const n = parseInt(customCount, 10)
+    if (!Number.isFinite(n) || n <= 0) {
+      setCustomError('Introdueix un número més gran que 0.')
+      return
+    }
+    if (n > songs.length) {
+      setCustomError(`Només hi ha ${songs.length} resultats disponibles.`)
+      return
+    }
+    setCustomError(null)
+    handleExport(n)
+  }
+
+  // Close the export menu when clicking outside it.
+  useEffect(() => {
+    if (!exportOpen) return
+    function onDown(e) {
+      if (exportRef.current && !exportRef.current.contains(e.target)) {
+        setExportOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [exportOpen])
 
   function handleShowMore() {
     setVisibleCount(prev => prev + 12)
@@ -43,7 +132,7 @@ export default function TopResults({
 
   function openBreakdown(e, songId) {
     e.stopPropagation()
-    if (chips.length < 2) return
+    if (chips.length < 1) return
     if (breakdown?.songId === songId) { setBreakdown(null); return }
     const rect = e.currentTarget.getBoundingClientRect()
     setBreakdown({
@@ -82,6 +171,72 @@ export default function TopResults({
         <span className="results-badge">{songs.length}</span>
       </header>
 
+      <div className="results-toolbar" ref={exportRef}>
+        <button
+          type="button"
+          className="results-export-btn"
+          onClick={() => setExportOpen(v => !v)}
+          aria-expanded={exportOpen}
+          disabled={songs.length === 0}
+          title="Exporta els top resultats com a CSV"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+          </svg>
+          Exportar
+        </button>
+        {exportOpen && (
+          <div className="results-export-menu" role="dialog" aria-label="Exporta top resultats">
+            <div className="results-export-head">Quants resultats?</div>
+            <div className="results-export-presets">
+              {[10, 50, 100].map(n => (
+                <button
+                  key={n}
+                  type="button"
+                  className="results-export-preset"
+                  onClick={() => handleExport(n)}
+                  disabled={n > songs.length}
+                  title={n > songs.length ? `Només hi ha ${songs.length} resultats` : `Exporta el top ${n}`}
+                >
+                  Top {n}
+                </button>
+              ))}
+            </div>
+            <form className="results-export-custom" onSubmit={handleCustomSubmit} noValidate>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={customCount}
+                onChange={e => {
+                  // Allow only digits; clear stale error as the user types.
+                  const v = e.target.value.replace(/[^0-9]/g, '')
+                  setCustomCount(v)
+                  if (customError) setCustomError(null)
+                }}
+                placeholder={`Núm. concret (1–${songs.length})`}
+                className="results-export-input"
+                autoFocus
+                aria-invalid={customError ? 'true' : 'false'}
+              />
+              <button
+                type="submit"
+                className="results-export-submit"
+                disabled={!customCount || parseInt(customCount, 10) <= 0}
+              >
+                Exporta
+              </button>
+            </form>
+            {customError && (
+              <div className="results-export-error" role="alert">{customError}</div>
+            )}
+            <div className="results-export-foot">
+              Format CSV · {songs.length} disponibles
+            </div>
+          </div>
+        )}
+      </div>
+
       {message && <div className="results-message">{message}</div>}
 
       <ol className="results-list">
@@ -90,7 +245,7 @@ export default function TopResults({
           const isActive = highlightedId === song.id
           const scorePct = song.score != null ? Math.round(song.score * 100) : null
           const ringColor = scorePct != null ? scoreColor(scorePct) : null
-          const hasMultiChip = chips.length > 1
+          const hasMultiChip = chips.length >= 1
           return (
             <li
               key={song.id}
@@ -121,7 +276,7 @@ export default function TopResults({
                 <div className="result-artist">{song.artist}</div>
                 {(song.album || song.year) && (
                   <div className="result-meta">
-                    {song.album}
+                    {formatAlbum(song.album)}
                     {song.album && song.year ? ' · ' : ''}
                     {song.year || ''}
                   </div>
@@ -135,9 +290,9 @@ export default function TopResults({
                 <div
                   className={`result-score-wrap${hasMultiChip ? ' result-score-wrap--clickable' : ''}`}
                   aria-label={
-                    hasMultiChip
+                    chips.length > 1
                       ? `Similitud combinada ${scorePct}% (clica per veure el desglossament)`
-                      : `Similitud ${scorePct}%`
+                      : `Similitud ${scorePct}% (clica per veure el desglossament per filtre)`
                   }
                 >
                   <button
@@ -196,9 +351,6 @@ export default function TopResults({
           </div>
           <ul className="result-score-breakdown-list">
             {breakdownRows(breakdown.songId).map(item => {
-              // Genre chips are binary — show a checkmark, not a percentage.
-              // A score % only makes sense for ranking chips (query/similar).
-              const isGenre = item.kind === 'genre'
               const pct = item.score != null ? Math.round(item.score * 100) : null
               return (
                 <li key={item.key} className="result-score-breakdown-row">
@@ -210,9 +362,9 @@ export default function TopResults({
                   </span>
                   <span
                     className="result-score-breakdown-val"
-                    style={!isGenre && pct != null ? { color: scoreColor(pct) } : undefined}
+                    style={pct != null ? { color: scoreColor(pct) } : undefined}
                   >
-                    {isGenre ? '✓' : (pct != null ? `${pct}%` : '—')}
+                    {pct != null ? `${pct}%` : '—'}
                   </span>
                 </li>
               )

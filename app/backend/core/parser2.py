@@ -90,72 +90,34 @@ import unicodedata
 from collections import defaultdict
 from functools import lru_cache
 
+import config
+
 
 # ---------------------------------------------------------------------------
-# Tunable constants
+# Tunable constants — sourced from config.py (see that file for rationale).
+# Names preserved here so existing imports like
+# ``from app.backend.core.parser2 import MAX_WORD_DISTANCE`` keep working.
 # ---------------------------------------------------------------------------
 
-# Edit-distance operation costs (see module docstring for the schedule).
-COST_SWAP        = 0.5    # adjacent transposition (e.g. amro ↔ amor)
-COST_INSERT      = 1.0    # input is missing a char
-COST_DELETE      = 1.0    # input has an extra char
-COST_SUB_ADJ     = 0.85   # substitution: keys are adjacent on QWERTY
-COST_SUB_FAR     = 1.5    # substitution: keys are not adjacent
-COST_ACCENT      = 0.1    # accent-only / fold-equivalent / middle-dot
-COST_SPACE       = 2.0    # explicit space — splits handled separately,
-                          # so this only matters in unusual call paths.
+COST_SWAP        = config.PARSER_COST_SWAP
+COST_INSERT      = config.PARSER_COST_INSERT
+COST_DELETE      = config.PARSER_COST_DELETE
+COST_SUB_ADJ     = config.PARSER_COST_SUB_ADJ
+COST_SUB_FAR     = config.PARSER_COST_SUB_FAR
+COST_ACCENT      = config.PARSER_COST_ACCENT
+COST_SPACE       = config.PARSER_COST_SPACE
 
-# Probability shape. DECAY controls how fast `exp(-DECAY * d / L)` drops:
-# higher value → far candidates lose more mass, so the input word ends up
-# dominating more after normalisation. With α = 2 sharpening on top of
-# this, DECAY = 3 keeps a healthy spread of correction candidates while
-# still putting the highest-frequency one on top.
-DECAY            = 3.0
+DECAY            = config.PARSER_DECAY
+SPLIT_COST       = config.PARSER_SPLIT_COST
+SOFTMAX_T        = config.PARSER_SOFTMAX_T
 
-# Cost charged to a pair-of-words split for the implicit missing space.
-# Sits between insert/delete (1.0) and a far substitution (2.0).
-SPLIT_COST       = 1.5
+KEEP_TOP_N       = config.PARSER_KEEP_TOP_N
+PROB_FLOOR       = config.PARSER_PROB_FLOOR
+INPUT_RAW_FLOOR  = config.PARSER_INPUT_RAW_FLOOR
+FREQ_REF         = config.PARSER_FREQ_REF
 
-# Softmax temperature for the per-word normalisation step. Each raw
-# probability is mapped through exp(p / T) and then normalised.
-# Lower T sharpens (the top candidate dominates); higher T flattens.
-# Tuned against the real wordfreq Catalan list so that correctly-
-# typed common words ('amor', 'casa', 'feliç', 'cançó', 'amic')
-# all end up at ≥ 90% of the per-word probability mass.
-SOFTMAX_T        = 0.10
-
-# Long-tail trim. After softmax the per-word distribution can have a
-# hundred ≤ 1% candidates. We keep at most KEEP_TOP_N candidates plus
-# anything ≥ PROB_FLOOR regardless of rank, then renormalise. The
-# survivors form a clean distribution where every entry is either
-# (a) genuinely competitive (≥ 0.20) or (b) one of the top KEEP_TOP_N
-# best guesses — wide enough that a domain-correct candidate ranked
-# low by wordfreq alone (e.g. 'boig' for input 'bog', crowded out by
-# common short words like 'bo'/'bon') still survives into downstream
-# scoring and reconstruction.
-KEEP_TOP_N       = 5
-PROB_FLOOR       = 0.20
-
-# Floor on the input word's *raw* probability (i.e. before softmax /
-# trim / renormalise). Niche real words ('garsa', dialect, proper
-# nouns…) might not be in wordfreq at all and would otherwise have
-# raw ≈ 0.11. Bumping the raw value to INPUT_RAW_FLOOR before the
-# softmax means the boost scales naturally with the alternates'
-# strength: if a correction is overwhelming the boost gets crushed
-# anyway (input still ~0%); if the alternates are all weak (every
-# candidate two mistakes away), the input stays competitive.
-INPUT_RAW_FLOOR  = 0.20
-
-# freq_factor reference. log1p(freq)/log1p(FREQ_REF) saturates at 1.0 when
-# freq ≥ FREQ_REF (≈ zipf 5).
-FREQ_REF         = 500.0
-
-# Distance budgets. Larger candidates aren't plausible corrections.
-# Sized so a single non-adjacent substitution (cost 1.5) just fits, while
-# two such subs don't — keeps "one weird key slip" correctable without
-# letting the catalogue blow up with two-edits-away noise.
-MAX_WORD_DISTANCE   = 1.75
-MAX_PHRASE_DISTANCE = 4.0   # kept for cercador_index._phrase_rerank
+MAX_WORD_DISTANCE   = config.PARSER_MAX_WORD_DISTANCE
+MAX_PHRASE_DISTANCE = config.PARSER_MAX_PHRASE_DISTANCE
 
 
 # ---------------------------------------------------------------------------

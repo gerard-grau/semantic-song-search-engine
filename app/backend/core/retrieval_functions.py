@@ -7,10 +7,27 @@ import pyarrow.parquet as pq
 BASE_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = BASE_DIR.parent
 DATA_DIR = BACKEND_DIR / "data"
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
+
+# Map known filenames to their split-layout subdirectory. Anything else
+# falls back to DATA_DIR so old callers don't break catastrophically.
+_LOCATION = {
+    "embedded_songs.parquet":     RAW_DIR,
+    "augmented_songs.csv":        RAW_DIR,
+    "cancons.csv":                RAW_DIR,
+    "grups.csv":                  RAW_DIR,
+    "noticies.csv":               RAW_DIR,
+    "embedded_songs_2d.parquet":          PROCESSED_DIR,
+    "embedded_songs_top5000.parquet":     PROCESSED_DIR,
+    "embedded_songs_genres.parquet":      PROCESSED_DIR,
+    "songs_meta.parquet":                 PROCESSED_DIR,
+    "top_5000_songs.csv":                 PROCESSED_DIR,
+}
 
 
 def data_path(filename):
-    return DATA_DIR / filename
+    return _LOCATION.get(filename, DATA_DIR) / filename
 
 
 def id2emb(target_id, file="embedded_songs.parquet"):

@@ -29,19 +29,27 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
+import config
+
 # Some lyrics fields are very long — bump the csv module's per-field cap.
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
 logger = logging.getLogger(__name__)
 
 _DATA_DIR        = Path(__file__).parent.parent / "data"
-_PARQUET         = _DATA_DIR / "embedded_songs.parquet"
-_PARQUET_TOP5000 = _DATA_DIR / "embedded_songs_top5000.parquet"
-_PARQUET_2D      = _DATA_DIR / "embedded_songs_2d.parquet"
-_META_PARQUET    = _DATA_DIR / "songs_meta.parquet"
-_GENRES_PARQ     = _DATA_DIR / "embedded_songs_genres.parquet"
-_AUGMENTED       = _DATA_DIR / "augmented_songs.csv"
-_CANCONS         = _DATA_DIR / "cancons.csv"
+_RAW_DIR         = _DATA_DIR / "raw"
+_PROCESSED_DIR   = _DATA_DIR / "processed"
+
+# Raw inputs (see data_pipeline/_paths.py)
+_PARQUET         = _RAW_DIR / "embedded_songs.parquet"
+_AUGMENTED       = _RAW_DIR / "augmented_songs.csv"
+_CANCONS         = _RAW_DIR / "cancons.csv"
+
+# Processed artefacts (built by data_pipeline)
+_PARQUET_TOP5000 = _PROCESSED_DIR / "embedded_songs_top5000.parquet"
+_PARQUET_2D      = _PROCESSED_DIR / "embedded_songs_2d.parquet"
+_META_PARQUET    = _PROCESSED_DIR / "songs_meta.parquet"
+_GENRES_PARQ     = _PROCESSED_DIR / "embedded_songs_genres.parquet"
 
 
 def _embeddings_source() -> Path:
@@ -170,7 +178,8 @@ def _parquet_ids_ordered(path: Path) -> list[int]:
 # Hard cap on the number of songs the frontend visualizes at once.
 # All songs are still embedded + projected to 2D in the parquets — this only
 # limits what we hand to the UI to keep the scatter plot legible.
-VISIBLE_SONG_LIMIT = 5000
+# Value sourced from config.py.
+VISIBLE_SONG_LIMIT = config.VISIBLE_SONG_LIMIT
 
 
 def select_top_songs(songs: list[dict], limit: int = VISIBLE_SONG_LIMIT) -> list[dict]:

@@ -40,10 +40,11 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
   const [results, setResults] = useState(null)
   const [isSearching, setIsSearching] = useState(false)
   const [selectedSongId, setSelectedSongId] = useState(null)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   // Embedding-suggestion pipeline state. `suggestions` is null until the
   // first trigger fires for this query — we use the null marker to hide
-  // the Sugerències section before any embedding call has been made.
+  // the Suggeriments section before any embedding call has been made.
   const [suggestions, setSuggestions] = useState(null)
   const [lyricsExtra, setLyricsExtra] = useState([])
   // Embedding-suggested group (the lexical engine missed it but the artist
@@ -311,6 +312,20 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
           Inici
         </button>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button
+            type="button"
+            className="cercador-nav-btn cercador-nav-btn--help"
+            onClick={() => setHelpOpen(true)}
+            aria-label="Ajuda — com funciona el Cercador"
+            title="Ajuda — com funciona el Cercador"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9.5" />
+              <path d="M9.2 9.2a2.8 2.8 0 1 1 3.9 2.6c-.8.4-1.1 1-1.1 2" />
+              <circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none" />
+            </svg>
+            Ajuda
+          </button>
           <button className="cercador-nav-btn cercador-nav-btn--accent" onClick={onDescobreix}>
             Descobridor
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -432,7 +447,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                                   {g._embedding && (
                                     <span
                                       className="cercador-embedding-badge"
-                                      title={`Sugerit per similitud d'embedding (${Math.round((g.score || 0) * 100)}% match)`}
+                                      title={`Suggerit per similitud d'embedding (${Math.round((g.score || 0) * 100)}% coincidència)`}
                                     >
                                       ✦
                                     </span>
@@ -463,7 +478,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                               </div>
                               <span className="cercador-grup-meta">
                                 {g._embedding
-                                  ? <em>Sugerit · {Math.round((g.score || 0) * 100)}% match</em>
+                                  ? <em>Suggerit · {Math.round((g.score || 0) * 100)}% coincidència</em>
                                   : <>
                                       {g.song_count} {g.song_count === 1 ? 'cançó' : 'cançons'}
                                       {g.municipi && <> · {g.municipi}</>}
@@ -501,11 +516,11 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
 
                       {showSuggestions && (
                         <div className="cercador-section cercador-section--suggestions">
-                          <h3 className="cercador-section-title">Sugerències</h3>
+                          <h3 className="cercador-section-title">Suggeriments</h3>
                           {isSuggesting ? (
                             <div className="cercador-loading cercador-loading--inline">
                               <span className="cercador-loading-dot" />
-                              Generant sugerències…
+                              Generant suggeriments…
                             </div>
                           ) : (
                             suggestions.map((s) => (
@@ -658,6 +673,74 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
       </main>
 
       <SongDetail songId={selectedSongId} onClose={() => setSelectedSongId(null)} />
+
+      {helpOpen && <CercadorHelpModal onClose={() => setHelpOpen(false)} />}
+    </div>
+  )
+}
+
+function CercadorHelpModal({ onClose }) {
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose?.() }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [onClose])
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal-content cercador-help-modal"
+        onClick={e => e.stopPropagation()}
+        role="dialog"
+        aria-label="Ajuda del Cercador"
+      >
+        <button className="modal-close" onClick={onClose} aria-label="Tancar">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
+
+        <div className="cercador-help-body">
+          <span className="cercador-help-eyebrow">Ajuda · Cercador</span>
+          <h2 className="cercador-help-title">Cerca per nom, no per significat.</h2>
+          <p className="cercador-help-lede">
+            Si saps què busques, escriu-ho. Cada tecla refresca tres
+            columnes en paral·lel.
+          </p>
+
+          <ul className="cercador-help-list">
+            <li>
+              <strong>Tres columnes alhora.</strong> Grups, lletres
+              (cançons) i notícies. Clica qualsevol resultat per obrir-lo.
+            </li>
+            <li>
+              <strong>Tolerància a typos.</strong> «bog per tu» troba
+              «Boig per Tu». Les correccions surten ressaltades.
+            </li>
+            <li>
+              <strong>Suggeriments semàntics.</strong> A sota dels grups,
+              una secció extra proposa coincidències per significat — útil
+              quan no recordes el nom exacte.
+            </li>
+            <li>
+              <strong>Drecera de teclat.</strong>{' '}
+              <kbd className="cercador-help-kbd">⌘</kbd>
+              <kbd className="cercador-help-kbd">K</kbd> enfoca la barra;{' '}
+              <kbd className="cercador-help-kbd">esc</kbd> la neteja.
+            </li>
+            <li>
+              <strong>Vols explorar per tema?</strong> Prem{' '}
+              <em>Descobridor</em> dalt a la dreta: cerca semàntica i mapa
+              2D del catàleg.
+            </li>
+          </ul>
+        </div>
+      </div>
     </div>
   )
 }

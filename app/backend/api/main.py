@@ -34,16 +34,16 @@ def _flag(name: str) -> bool:
 def _maybe_recompute() -> None:
     """Optionally regenerate the precomputed parquets before the server starts."""
     if _flag("RECOMPUTE_2D"):
-        from app.backend.core.data_pipeline import run_projection
+        from data_pipeline.step6_project_2d import run as run_projection
         from app.backend.core.projections import invalidate_cache as invalidate_proj
         logger.info("RECOMPUTE_2D=1 — regenerating 2D projection parquet …")
-        run_projection()
+        run_projection(force=True)
         invalidate_proj()
     if _flag("RECOMPUTE_META"):
         from app.backend.core.data_loader import invalidate_cache as invalidate_loader
-        from app.backend.core.data_pipeline import run_metadata_snapshot
+        from data_pipeline.step5_build_meta import run as run_metadata_snapshot
         logger.info("RECOMPUTE_META=1 — regenerating metadata snapshot …")
-        run_metadata_snapshot()
+        run_metadata_snapshot(force=True)
         invalidate_loader()
 
 
