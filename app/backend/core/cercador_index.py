@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import config
 from app.backend.core.data_loader import load_all_songs
 from app.backend.core.parser2 import (
     MAX_PHRASE_DISTANCE,
@@ -86,17 +87,8 @@ _STOPWORDS = {
 }
 
 
-# wordfreq-based dampener reference (per-million scale used by
-# Parser2.load_lexicon). Each scored token is multiplied by
-# 1 / (1 + lex_freq / LEX_PENALTY_REF). Set so:
-#   * pel ("per+el", per-million freq ~300+) → multiplier ~0.25
-#   * terra (noun, per-million freq ~50)     → multiplier ~0.67
-#   * amor (noun, per-million freq ~20)      → multiplier ~0.83
-#   * OOV / proper nouns / song-specific     → multiplier 1.0
-# This makes "rarer words count more" hold across the language even when
-# corpus IDF doesn't tell them apart (both pel and terra appear in many
-# titles, but pel is grammatical filler and terra is a content noun).
-LEX_PENALTY_REF = 100
+# Tunable knobs sourced from config.py (see that file for rationale).
+LEX_PENALTY_REF = config.CERCADOR_LEX_PENALTY_REF
 
 
 # ---------------------------------------------------------------------------
@@ -175,26 +167,19 @@ def _load_noticies() -> list[dict]:
 class CercadorIndex:
     """In-memory inverted indices over songs/grups/noticies."""
 
-    # Field weights — title/name fields beat snippets/lyrics. Exact-phrase
-    # match on the whole field gets an additive boost on top.
-    W_SONG_TITLE   = 1.6
-    W_SONG_ARTIST  = 1.3
-    W_SONG_LYRICS  = 0.8
-    W_GRUP_NAME    = 1.6
-    W_NOTI_TITLE   = 1.6
-    W_NOTI_SNIPPET = 0.4
+    # Field weights and reconstruction params — sourced from config.py.
+    W_SONG_TITLE   = config.CERCADOR_W_SONG_TITLE
+    W_SONG_ARTIST  = config.CERCADOR_W_SONG_ARTIST
+    W_SONG_LYRICS  = config.CERCADOR_W_SONG_LYRICS
+    W_GRUP_NAME    = config.CERCADOR_W_GRUP_NAME
+    W_NOTI_TITLE   = config.CERCADOR_W_NOTI_TITLE
+    W_NOTI_SNIPPET = config.CERCADOR_W_NOTI_SNIPPET
 
-    EXACT_PHRASE_BOOST = 50.0
+    EXACT_PHRASE_BOOST = config.CERCADOR_EXACT_PHRASE_BOOST
 
-    # Reconstructed-sentence exact-phrase boost. We enumerate the top
-    # full-sentence reconstructions of the query (cartesian product of
-    # Parser2's per-word alts, beam-pruned by joint probability) and
-    # apply the same EXACT_PHRASE_BOOST to any exact match. Catches
-    # "bog per tu" → "boig per tu" hitting the song title, which the
-    # literal-q_norm boost misses entirely.
-    RECONSTRUCT_TOP_PER_WORD   = 5     # per-word fan-out into the beam
-    RECONSTRUCT_BEAM_K         = 32    # max sentences kept per beam step
-    RECONSTRUCT_MIN_JOINT_PROB = 0.05  # drop reconstructions below this
+    RECONSTRUCT_TOP_PER_WORD   = config.CERCADOR_RECONSTRUCT_TOP_PER_WORD
+    RECONSTRUCT_BEAM_K         = config.CERCADOR_RECONSTRUCT_BEAM_K
+    RECONSTRUCT_MIN_JOINT_PROB = config.CERCADOR_RECONSTRUCT_MIN_JOINT_PROB
 
     def __init__(self):
         self.songs:    list[dict] = []
@@ -359,15 +344,15 @@ class CercadorIndex:
     def search(
         self,
         query: str,
-        top_grups: int = 5,
-        top_songs: int = 8,
-        top_noticies: int = 5,
+        top_grups: int = config.CERCADOR_TOP_GRUPS,
+        top_songs: int = config.CERCADOR_TOP_SONGS,
+        top_noticies: int = config.CERCADOR_TOP_NOTICIES,
     ) -> dict:
         # phrase_match=False: Parser2's full-query phrase scan is O(catalog)
         # and dominates latency. Our inverted index already retrieves multi-
         # word matches; we just need bag-of-words query expansion (input
         # words + per-word fuzzy alternates) from the parser.
-        parsed = self.parser.parse(query, top_k=20, phrase_match=False)
+        parsed = self.parser.parse(query, top_k=config.CERCADOR_PARSER_TOP_K, phrase_match=False)
         q_norm = normalize(query)
 
         # When every input token is a stopword ("pel", "el meu", …) the
@@ -424,13 +409,17 @@ class CercadorIndex:
         if len(tokenize(q_norm)) >= 2:
             ql = len(q_norm)
             self._phrase_rerank(q_norm, ql, song_scores, self._songs_title_norm,
-                                top_n=120, weight=18.0)
+                                top_n=config.CERCADOR_PHRASE_RERANK_TOP_N,
+                                weight=config.CERCADOR_PHRASE_RERANK_WEIGHT_TITLE)
             self._phrase_rerank(q_norm, ql, song_scores, self._songs_artist_norm,
-                                top_n=120, weight=12.0)
+                                top_n=config.CERCADOR_PHRASE_RERANK_TOP_N,
+                                weight=config.CERCADOR_PHRASE_RERANK_WEIGHT_ARTIST)
             self._phrase_rerank(q_norm, ql, grup_scores, self._grups_name_norm,
-                                top_n=120, weight=18.0)
+                                top_n=config.CERCADOR_PHRASE_RERANK_TOP_N,
+                                weight=config.CERCADOR_PHRASE_RERANK_WEIGHT_TITLE)
             self._phrase_rerank(q_norm, ql, noticia_scores, self._noticies_title_norm,
-                                top_n=120, weight=12.0)
+                                top_n=config.CERCADOR_PHRASE_RERANK_TOP_N,
+                                weight=config.CERCADOR_PHRASE_RERANK_WEIGHT_ARTIST)
 
         # Dedup keys are normalized so casing/accent variants of the same
         # record collapse: "Sau" and "sau" → one group, etc.

@@ -29,6 +29,8 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
+import config
+
 # Some lyrics fields are very long — bump the csv module's per-field cap.
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
@@ -166,7 +168,8 @@ def _parquet_ids_ordered(path: Path) -> list[int]:
 # Hard cap on the number of songs the frontend visualizes at once.
 # All songs are still embedded + projected to 2D in the parquets — this only
 # limits what we hand to the UI to keep the scatter plot legible.
-VISIBLE_SONG_LIMIT = 5000
+# Value sourced from config.py.
+VISIBLE_SONG_LIMIT = config.VISIBLE_SONG_LIMIT
 
 
 def select_top_songs(songs: list[dict], limit: int = VISIBLE_SONG_LIMIT) -> list[dict]:

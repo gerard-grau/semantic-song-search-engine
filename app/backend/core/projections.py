@@ -105,8 +105,8 @@ def get_all_projections_2d() -> list[dict]:
     if _cached_all_2d is None:
         if not _PRECOMP_2D.exists():
             logger.warning(
-                "No 2D parquet at %s. Run `python -m app.backend.core.data_pipeline` "
-                "or start the API with --recompute-2d.",
+                "No 2D parquet at %s. Run `python -m data_pipeline.execute_all` "
+                "or start the API with RECOMPUTE_2D=1.",
                 _PRECOMP_2D,
             )
             _cached_all_2d = []

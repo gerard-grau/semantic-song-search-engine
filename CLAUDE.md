@@ -27,20 +27,19 @@ python -m uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000
 RECOMPUTE_2D=1   python -m uvicorn app.backend.api.main:app ...   # rebuild embedded_songs_2d.parquet
 RECOMPUTE_META=1 python -m uvicorn app.backend.api.main:app ...   # rebuild songs_meta.parquet
 
-# Precompute artefacts manually (recommended before first run)
-.venv/bin/python -m app.backend.core.data_pipeline                # top-5000 embeddings + 2D + metadata
-.venv/bin/python -m app.backend.core.data_pipeline --only-meta    # metadata snapshot only
-.venv/bin/python -m app.backend.core.data_pipeline --skip-meta    # 2D projection only
-.venv/bin/python -m app.backend.core.data_pipeline --method tsne  # use t-SNE instead of UMAP
-.venv/bin/python -m app.backend.core.data_pipeline --genre-mode none  # disable genre clustering bias
+# Build every data artefact in one shot (idempotent — skips outputs that exist)
+.venv/bin/python -m data_pipeline.execute_all
+.venv/bin/python -m data_pipeline.execute_all --force                # rebuild everything
+.venv/bin/python -m data_pipeline.execute_all --method tsne          # use t-SNE instead of UMAP
+.venv/bin/python -m data_pipeline.execute_all --genre-mode none      # disable genre clustering bias
 
-# ETL (offline, populates app/backend/data/)
-python -m etl.build_top_songs            # validacio/entrances_exits.csv → top_5000_songs.csv
-python -m etl.merge_top5000_with_db      # full embeddings parquet → top-5000 parquet
-python -m etl.build_songs_meta_from_db   # MariaDB → songs_meta.parquet (alt to data_pipeline --only-meta)
-
-# Genre classification (zero-shot bge-m3)
-.venv/bin/python -m ml.embeddings.classify_genres
+# Run an individual step (each lives in data_pipeline/stepN_*.py)
+.venv/bin/python -m data_pipeline.step1_fetch_catalogue_csvs --force
+.venv/bin/python -m data_pipeline.step2_build_top_songs      --force
+.venv/bin/python -m data_pipeline.step3_filter_top5000_embeddings --force
+.venv/bin/python -m data_pipeline.step4_build_genres_parquet --force
+.venv/bin/python -m data_pipeline.step5_build_meta           --force
+.venv/bin/python -m data_pipeline.step6_project_2d           --force
 ```
 
 Swagger UI at `http://127.0.0.1:8000/docs`. Health probe at `GET /`.
@@ -79,22 +78,43 @@ After warmup, every `/api/filter` call is one encoder forward pass + one matmul 
 
 ### Data pipeline (offline → online)
 
-```
-embedded_songs.parquet (full ~80k songs, BAAI/bge-m3 per-field embeddings)
-   │
-   ├─ etl.merge_top5000_with_db  +  validacio/top_5000_songs.csv
-   ▼
-embedded_songs_top5000.parquet  (5000 most-viewed; what the API actually scores against)
-   │
-   ├─ data_pipeline.run_projection  (UMAP/t-SNE, optionally genre-augmented)
-   ▼
-embedded_songs_2d.parquet  (id_lyrics, x, y)
+All offline data generation lives in `data_pipeline/`. The only files
+that must exist before the pipeline runs are:
 
-augmented_songs.csv + cancons.csv  ──data_pipeline.run_metadata_snapshot──▶  songs_meta.parquet
-embedded_songs.parquet  ──ml.embeddings.classify_genres──▶  embedded_songs_genres.parquet
+* `app/backend/data/augmented_songs.csv`     — full song table
+* `app/backend/data/embedded_songs.parquet`  — per-field bge-m3 embeddings
+* `validacio/entrances_exits.csv`            — GA4 popularity export
+* `.env`                                     — MariaDB credentials (optional)
+
+One command (`python -m data_pipeline.execute_all`) chains the six steps:
+
+```
+step1_fetch_catalogue_csvs.py   ──▶  cancons.csv, grups.csv, noticies.csv
+    (DB → CSVs; skipped if files already present, warns if DB unreachable)
+
+step2_build_top_songs.py        ──▶  top_5000_songs.csv  (with genre column)
+    (entrances_exits.csv + data_pipeline/_genres.py human-labeled dict)
+
+step3_filter_top5000_embeddings.py  ──▶  embedded_songs_top5000.parquet
+    (two-pointer alignment over (id_lyrics, artist) → 5000 rows in popularity order)
+
+step4_build_genres_parquet.py   ──▶  embedded_songs_genres.parquet
+    (one-hot per song from the genre column in top_5000_songs.csv)
+
+step5_build_meta.py             ──▶  songs_meta.parquet
+    (augmented_songs.csv + cancons.csv ⨝ genres parquet)
+
+step6_project_2d.py             ──▶  embedded_songs_2d.parquet
+    (UMAP/t-SNE, optionally genre-augmented)
 ```
 
-`app/backend/data/` is gitignored — all parquets/CSVs must be generated locally before the API works.
+`app/backend/data/` is gitignored — all parquets/CSVs except the two
+inputs above are generated locally by `execute_all`.
+
+**Genres.** The taxonomy is six labels — `folk`, `cançó autor`,
+`pop-rock`, `rumba`, `havanera`, `música urbana` — listed in
+`data_pipeline/_genres.py`. The same six show up in
+`app/frontend/src/components/visualizations/genreColors.js`; keep both in sync.
 
 ### Embedding model & scoring
 
@@ -127,7 +147,7 @@ Design notes:
 
 ### 2D projection augmentation
 
-`data_pipeline.run_projection` builds layout vectors as `concat(unit(text), alpha_genre * unit(genre_profile))` so songs cluster by genre. With both halves unit-norm, `alpha_genre² / (1 + alpha_genre²)` is genre's share of squared distance. Default `alpha_genre=2.0` ≈ 80% genre / 20% text. CLI flags: `--genre-mode {soft,onehot,none}`, `--alpha-genre`, `--method {umap,tsne,pca_umap}`, `--pca-dim`.
+`data_pipeline.step6_project_2d` builds layout vectors as `concat(unit(text), alpha_genre * unit(genre_profile))` so songs cluster by genre. With both halves unit-norm, `alpha_genre² / (1 + alpha_genre²)` is genre's share of squared distance. Default `alpha_genre=2.0` ≈ 80% genre / 20% text. CLI flags: `--genre-mode {soft,onehot,none}`, `--alpha-genre`, `--method {umap,tsne,pca_umap}`, `--pca-dim`.
 
 ### `searchoptimal/parser2.py` and `core/cercador_index.py`
 

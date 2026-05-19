@@ -27,6 +27,7 @@ import logging
 
 import numpy as np
 
+import config
 from app.backend.core.encoder import encode_query
 from app.backend.core.similarity import (
     cosine_vector,
@@ -36,83 +37,19 @@ from app.backend.core.similarity import (
 
 logger = logging.getLogger(__name__)
 
-# Small, deliberate. Genre nudges the ranking but never overrides the text
-# signal — the user wants "a little" genre influence, not infinite. With
-# both vectors L2-normalised, ``GENRE_WEIGHT`` is the maximum genre bonus a
-# song can earn on top of its [0, 1]-normalised text score.
-GENRE_WEIGHT = 0.15
-
-# Percentile cut-offs applied to normalised scores. The query filter keeps
-# only the top ~10% so the visualization actually feels selective — at 70
-# (top 30%) ~1300 songs survived the first chip and the dim/highlight on
-# the scatter looked indistinguishable from "everything active". Similarity
-# chips stay broad on purpose — clicking a song should pull in many cousins
-# so that stacking 3-4 chips intersects to a meaningful "similar to all of
-# these" set instead of one or two near-duplicates.
-QUERY_PERCENTILE = 90.0
-SIMILAR_PERCENTILE = 50.0
-
-# Field rows used when combining per-field cosines for song-to-song
-# similarity. EMBEDDING_FIELD_COLUMNS order is
-# (lyrics, description, title, album, artist) — we deliberately skip
-# album (too noisy: same album → trivially similar) and use the four
-# semantic fields.
-#
-# Combination is a self-weighted mean (sum(s^p) / sum(s^(p-1))) *gated*
-# by the top field score raised to ``SIMILAR_GATE_POWER``. The gate is
-# what makes a low best-field collapse the whole score, while a high
-# best-field carries the song near its max:
-#
-#     score = (sum s_i^p / sum s_i^(p-1)) · max(s_i)^g
-#
-#   [0.95, 0.10, 0.10, 0.10] → 0.947 · 0.95   ≈ 0.90  (one strong field carries it)
-#   [0.80, 0.80, 0.80, 0.80] → 0.800 · 0.80   ≈ 0.64  (balanced, still decent)
-#   [0.60, 0.10, 0.10, 0.10] → 0.593 · 0.60   ≈ 0.36  (top field too weak → collapses)
-#   [0.95, 0.95, 0.95, 0.10] → 0.950 · 0.95   ≈ 0.90
-#   [0.30, 0.30, 0.30, 0.30] → 0.300 · 0.30   ≈ 0.09  (all weak → near zero)
-#
-# Higher ``SIMILAR_GATE_POWER`` punishes low-max candidates harder.
-SIMILAR_FIELDS = (0, 1, 2, 4)  # lyrics, description, title, artist
-SIMILAR_FIELD_POWER = 4.0
-SIMILAR_GATE_POWER  = 0.5
-
-# Cercador smart-suggestions tuning.
-#
-# SUGGESTION_FIELDS — which song fields the embedding pass scores against.
-# We pair lyrics with qualitative_description and title:
-#   * lyrics  — direct topical signal from the actual words sung.
-#   * qualitative_description — thematic blurb (when not template-noise).
-#   * title   — semantic match on the song name itself. The lexical engine
-#               only finds titles that *contain* the query string verbatim
-#               (with typo tolerance), so embedding-matching on titles
-#               catches titles that are conceptually close to the query
-#               without sharing surface words (query "lluna" matching a
-#               title "La nit", etc.).
-# Artist and album are still excluded — artist is covered by the dedicated
-# group_extra channel, and album is too noisy (same album → trivially
-# similar songs that aren't what the user asked for).
-# Combining the three with max-over-fields lets whichever side caught the
-# query win, so a heavily-templated qualitative blurb can no longer drag
-# a clean lyrics or title match toward the average.
-#
-# SUGGESTION_COSINE_FLOOR — absolute raw-cosine threshold. Songs whose best
-# field cosine is below this aren't shown, so weak queries return 0–K results
-# instead of always K mediocre ones. Tuned for bge-m3 on Catalan; below
-# ~0.35 cosines are mostly template/structural noise.
-SUGGESTION_FIELDS = (0, 1, 2)     # lyrics, qualitative_description, title
-SUGGESTION_COSINE_FLOOR = 0.40
-# Index of the per-song artist-embedding field — same source the visible
-# cube uses (see EMBEDDING_FIELD_COLUMNS in data_loader). Group suggestions
-# match the user query against this field, deduped by artist name.
-ARTIST_FIELD_IDX = 4
-# Separate floor for the group-extra channel. The artist field is just
-# bge-m3's encoding of the artist's *name* as a string — it has no semantic
-# signal about the artist's music, so even a moderate cosine (0.4–0.5)
-# usually means "the query has some letters in common with the name", not
-# "this artist is what the user meant". Set the bar much higher so only
-# genuine near-matches (typo-tolerant lexical-near-misses, abbreviations
-# like 'L. Llach', unusual word orders) get through.
-GROUP_SUGGESTION_COSINE_FLOOR = 0.60
+# All tuning constants come from config.py — see that file for rationale.
+# Re-bound at module level so existing callers (and tests) can keep using
+# ``from app.backend.core.embeddings import GENRE_WEIGHT`` etc.
+GENRE_WEIGHT                  = config.GENRE_WEIGHT
+QUERY_PERCENTILE              = config.QUERY_PERCENTILE
+SIMILAR_PERCENTILE            = config.SIMILAR_PERCENTILE
+SIMILAR_FIELDS                = config.SIMILAR_FIELDS
+SIMILAR_FIELD_POWER           = config.SIMILAR_FIELD_POWER
+SIMILAR_GATE_POWER            = config.SIMILAR_GATE_POWER
+SUGGESTION_FIELDS             = config.SUGGESTION_FIELDS
+SUGGESTION_COSINE_FLOOR       = config.SUGGESTION_COSINE_FLOOR
+ARTIST_FIELD_IDX              = config.ARTIST_FIELD_IDX
+GROUP_SUGGESTION_COSINE_FLOOR = config.GROUP_SUGGESTION_COSINE_FLOOR
 
 
 # ── Fast vectorised path ────────────────────────────────────────────────────
@@ -375,8 +312,8 @@ def compute_cercador_suggestions(
     index: dict,
     exclude_ids: set[int] | None = None,
     exclude_artist_names: set[str] | None = None,
-    suggestions_k: int = 4,
-    lyrics_extra_k: int = 2,
+    suggestions_k: int = config.CERCADOR_SUGGESTIONS_K,
+    lyrics_extra_k: int = config.CERCADOR_LYRICS_EXTRA_K,
 ) -> dict:
     """Embedding-based smart-suggestions companion to /api/cercador.
 

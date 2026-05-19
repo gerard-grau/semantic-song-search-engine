@@ -10,7 +10,8 @@
       "Bash(/mnt/c/Users/eloip/Documents/UPC/PE/semantic-song-search-engine/.venv/bin/python -c \"import pyarrow.parquet as pq; t=pq.read_table\\('/mnt/c/Users/eloip/Documents/UPC/PE/semantic-song-search-engine/app/backend/data/embedded_songs.parquet'\\); print\\('rows:', t.num_rows\\); print\\('cols:', t.column_names\\)\")",
       "Bash(python3 *)",
       "Bash(/mnt/c/Users/eloip/Documents/UPC/PE/semantic-song-search-engine/.venv/bin/python -c ' *)",
-      "Bash(/mnt/c/Users/eloip/Documents/UPC/PE/semantic-song-search-engine/.venv/bin/python *)"
+      "Bash(/mnt/c/Users/eloip/Documents/UPC/PE/semantic-song-search-engine/.venv/bin/python *)",
+      "Bash(awk -F, 'NR>1 {print $NF}' /mnt/c/Users/eloip/Documents/UPC/PE/semantic-song-search-engine/validacio/top_5000_final.csv)"
     ]
   }
 }
