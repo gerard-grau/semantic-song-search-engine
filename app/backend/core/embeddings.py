@@ -80,29 +80,36 @@ def filter_embeddings_fast(
     """Vectorised query-text filter over the dense visible index.
 
     Returns a list of ``(row_idx, score)`` pairs sorted by score desc.
-    Always non-empty when the subset is non-empty: if everything is below
-    the percentile we return the single best row.
 
-    Scoring is the same multi-field late fusion as the legacy path
-    (per-field mean centering, max over fields, min-max normalisation,
-    small genre-centroid bonus), only the data path is fast: one ``(n*F)
-    × D`` matmul against the row slice instead of allocating + filling a
-    fresh block per call.
+    Scoring and thresholding are **computed over the entire visible
+    catalog**, never over ``song_ids``. ``song_ids`` is only used at the
+    end to intersect global survivors with the caller-supplied alive set
+    — that makes chip composition commutative (``[A, B]`` and ``[B, A]``
+    return the same survivors and the same per-song score), and removes
+    the echo-chamber feedback that biased the genre centroid toward
+    artists already over-represented in the subset.
     """
-    sub_idx = _resolve_subset(song_ids, index)
-    if sub_idx.size == 0:
-        return []
-
     matrix = index["matrix"]      # (N, F, D)
     valid  = index["valid"]       # (N, F)
     genre_matrix = index["genre_matrix"]
     genre_valid  = index["genre_valid"]
     songs = index["songs"]
+    id_to_idx = index["id_to_idx"]
 
-    n = sub_idx.size
-    F, D = matrix.shape[1], matrix.shape[2]
+    N, F, D = matrix.shape
 
-    if not query_text.strip() or F == 0 or D == 0:
+    # Subset to intersect at the end. ``None`` → keep every visible song.
+    if song_ids is None:
+        sub_idx = np.arange(N, dtype=np.int64)
+    else:
+        sub_idx = np.asarray(
+            [id_to_idx[i] for i in song_ids if i in id_to_idx],
+            dtype=np.int64,
+        )
+    if sub_idx.size == 0:
+        return []
+
+    if not query_text.strip() or N == 0 or F == 0 or D == 0:
         return [(int(i), 0.5) for i in sub_idx]
 
     try:
@@ -116,22 +123,21 @@ def filter_embeddings_fast(
         return [(int(i), 0.5) for i in sub_idx]
     q = q / q_norm
 
-    sub_M = matrix[sub_idx]            # (n, F, D)
-    sub_V = valid[sub_idx]             # (n, F)
-
-    # One matmul: (n*F, D) · (D,) → (n*F,) → (n, F)
-    sims = (sub_M.reshape(n * F, D) @ q).reshape(n, F)
+    # One matmul over the WHOLE catalog: (N*F, D) · (D,) → (N*F,) → (N, F)
+    sims = (matrix.reshape(N * F, D) @ q).reshape(N, F)
     sims = np.clip(sims, -1.0, 1.0).astype(np.float64)
 
-    # Per-field mean across the candidate subset, masking missing fields
-    # so they don't drag the mean toward 0.
-    counts = sub_V.sum(axis=0).clip(min=1)
-    field_mean = np.where(sub_V, sims, 0.0).sum(axis=0) / counts
+    # Per-field mean across the full catalog (masking missing fields so
+    # they don't drag the mean toward 0). Independent of song_ids — same
+    # query → same mean, regardless of which chips ran before.
+    counts = valid.sum(axis=0).clip(min=1)
+    field_mean = np.where(valid, sims, 0.0).sum(axis=0) / counts
     centered = sims - field_mean
-    centered = np.where(sub_V, centered, -np.inf)
+    centered = np.where(valid, centered, -np.inf)
     raw_scores = centered.max(axis=1)
 
-    # Min-max into [0, 1] so the percentile threshold is well calibrated.
+    # Min-max into [0, 1] over the catalog so the percentile threshold
+    # uses a fixed scale across chips.
     s_min, s_max = float(raw_scores.min()), float(raw_scores.max())
     spread = s_max - s_min
     if spread > 1e-6:
@@ -139,24 +145,22 @@ def filter_embeddings_fast(
     else:
         norm_scores = np.full_like(raw_scores, 0.5)
 
-    # Genre-centroid bonus: nudge toward genres dominant among text
-    # leaders. Same intent as the legacy ``_apply_query_genre_bonus`` but
-    # vectorised over the slice.
-    if genre_matrix is not None and genre_valid is not None and n > 0:
-        sub_GV = genre_valid[sub_idx]
-        if sub_GV.any():
-            sub_G = genre_matrix[sub_idx]
-            k = min(25, n)
+    # Genre-centroid bonus over the catalog's top leaders. Computed once
+    # per query (no dependence on subset) so it can't snowball when chips
+    # narrow the alive set toward one artist's dominant genre.
+    if genre_matrix is not None and genre_valid is not None and N > 0:
+        if genre_valid.any():
+            k = min(25, N)
             leader_idx = np.argpartition(-norm_scores, k - 1)[:k]
-            leader_G  = sub_G[leader_idx]
-            leader_V  = sub_GV[leader_idx]
+            leader_G  = genre_matrix[leader_idx]
+            leader_V  = genre_valid[leader_idx]
             if leader_V.any():
                 centroid = leader_G[leader_V].sum(axis=0)
                 c_norm = float(np.linalg.norm(centroid))
                 if c_norm > 1e-9:
                     centroid = centroid / c_norm
-                    bonus = np.clip(sub_G @ centroid, 0.0, 1.0)
-                    bonus = np.where(sub_GV, bonus, 0.0)
+                    bonus = np.clip(genre_matrix @ centroid, 0.0, 1.0)
+                    bonus = np.where(genre_valid, bonus, 0.0)
                     boosted = norm_scores + GENRE_WEIGHT * bonus
                     b_min, b_max = float(boosted.min()), float(boosted.max())
                     bspread = b_max - b_min
@@ -165,14 +169,23 @@ def filter_embeddings_fast(
                     else:
                         norm_scores = boosted
 
+    # Global threshold + intersect with the alive subset.
     threshold = float(np.percentile(norm_scores, QUERY_PERCENTILE))
-    keep = norm_scores >= threshold
+    keep_global = norm_scores >= threshold
+
+    in_subset = np.zeros(N, dtype=bool)
+    in_subset[sub_idx] = True
+    keep = keep_global & in_subset
+
     if not keep.any():
-        keep = np.zeros_like(keep)
-        keep[int(np.argmax(norm_scores))] = True
+        # Fallback: take the single best row inside the subset so the chip
+        # never wipes the alive set to zero on its own.
+        sub_scores = np.where(in_subset, norm_scores, -np.inf)
+        keep = np.zeros(N, dtype=bool)
+        keep[int(np.argmax(sub_scores))] = True
 
     survivors = [
-        (int(sub_idx[i]), float(round(norm_scores[i], 4)))
+        (int(i), float(round(norm_scores[i], 4)))
         for i in np.where(keep)[0]
     ]
     survivors.sort(key=lambda t: t[1], reverse=True)
@@ -188,14 +201,17 @@ def filter_by_similarity_fast(
     """Vectorised song-to-song similarity filter over the dense visible index.
 
     Acts as a *filter*, not a top-k: returns every song whose similarity to
-    the focal is above ``percentile`` of the normalised score, so the
-    chip behaves like the query chip and stacking multiple chips composes
+    the focal is above ``percentile`` of the normalised score, so the chip
+    behaves like the query chip and stacking multiple chips composes
     naturally into "similar to all of these".
 
-    Scoring combines per-field cosines (title, lyrics, artist, description)
-    via a self-weighted mean — a single very strong field carries the
-    score, while balanced low scores collapse. See ``SIMILAR_FIELDS`` and
-    ``SIMILAR_FIELD_POWER`` for the formula.
+    Scoring and thresholding are **computed over the entire visible
+    catalog**, never over ``song_ids``. ``song_ids`` only intersects the
+    global survivors at the end. That keeps chip composition commutative
+    and prevents the genre bonus from snowballing as the subset narrows.
+    The focal song is always in the global survivor set, but if the
+    caller's subset excludes it, the intersection drops it — at that
+    point the user has explicitly filtered it out via another chip.
     """
     id_to_idx = index["id_to_idx"]
     focal_idx_full = id_to_idx.get(int(focal_id))
@@ -204,18 +220,23 @@ def filter_by_similarity_fast(
 
     matrix = index["matrix"]   # (N, F, D)
     valid  = index["valid"]    # (N, F)
-    if matrix.shape[1] == 0 or matrix.shape[2] == 0:
+    N, F_total, D = matrix.shape
+    if F_total == 0 or D == 0:
         return []
 
-    sub_idx = _resolve_subset(song_ids, index)
-    if sub_idx.size == 0:
-        sub_idx = np.array([focal_idx_full], dtype=np.int64)
-    if focal_idx_full not in sub_idx:
-        sub_idx = np.append(sub_idx, focal_idx_full)
+    if song_ids is None:
+        sub_idx = np.arange(N, dtype=np.int64)
+    else:
+        sub_idx = np.asarray(
+            [id_to_idx[i] for i in song_ids if i in id_to_idx],
+            dtype=np.int64,
+        )
+    # Even if the subset is empty (e.g. previous chip wiped it), still
+    # compute global similarity so we can fall back to "at least the focal
+    # + one neighbour" when the intersection comes out empty.
 
     # Restrict to fields that actually exist in the matrix; preserves the
     # configured order so weighting stays predictable.
-    F_total = matrix.shape[1]
     use_fields = [f for f in SIMILAR_FIELDS if f < F_total]
     if not use_fields:
         return []
@@ -225,23 +246,14 @@ def filter_by_similarity_fast(
     if not focal_valid.any():
         return []
 
-    sub_block = matrix[sub_idx][:, use_fields, :]            # (n, Fu, D)
-    sub_valid = valid[sub_idx][:, use_fields]                # (n, Fu)
-
-    # Per-field cosine: candidate.field · focal.field, done in one
-    # einsum so each candidate's field aligns with the focal's matching
-    # field (title↔title, lyrics↔lyrics, …).
-    per_field = np.einsum("nfd,fd->nf", sub_block, focal_block)
+    # Per-field cosine over the WHOLE catalog: candidate.field · focal.field.
+    full_block = matrix[:, use_fields, :]                    # (N, Fu, D)
+    full_valid = valid[:, use_fields]                        # (N, Fu)
+    per_field = np.einsum("nfd,fd->nf", full_block, focal_block)
     per_field = np.clip(per_field, -1.0, 1.0).astype(np.float64)
 
-    # Only fields valid on *both* sides count. Missing fields contribute
-    # nothing (no weight, no signal) so they neither inflate nor deflate
-    # the combined score.
-    field_mask = sub_valid & focal_valid[None, :]
-    # Map cosines into [0, 1] (negative correlations don't make a song
-    # "more similar"), then apply the self-weighted mean. Power p
-    # determines how much the top field dominates the mean; the gate
-    # below punishes candidates whose best field isn't actually strong.
+    # Only fields valid on *both* sides count.
+    field_mask = full_valid & focal_valid[None, :]
     sims_pos = np.clip(per_field, 0.0, 1.0)
     sims_pos = np.where(field_mask, sims_pos, 0.0)
     p = SIMILAR_FIELD_POWER
@@ -254,31 +266,24 @@ def filter_by_similarity_fast(
         0.0,
     )
 
-    # Gate: multiply by the candidate's best valid field, raised to g.
-    # Without this gate, a single 0.60 field looks ~as relevant as a
-    # single 0.95 field — both pull the self-weighted mean toward
-    # themselves. The gate makes "is the best field actually strong?"
-    # part of the score, so [0.60, 0.10, 0.10, 0.10] collapses far below
-    # [0.95, 0.10, 0.10, 0.10] instead of sitting just below it.
     field_top = np.where(field_mask, sims_pos, 0.0).max(axis=1)
     raw = self_weighted * (field_top ** SIMILAR_GATE_POWER)
 
-    # Small genre alignment bonus on top — same intent as before, kept
-    # bounded by ``GENRE_WEIGHT`` so it nudges without overriding the
-    # field signal.
+    # Genre bonus computed over the whole catalog. Stable across chip order.
     genre_matrix = index["genre_matrix"]
     genre_valid  = index["genre_valid"]
-    if genre_matrix is not None and genre_valid is not None and genre_valid[focal_idx_full]:
+    if (
+        genre_matrix is not None
+        and genre_valid is not None
+        and genre_valid[focal_idx_full]
+    ):
         focal_g = genre_matrix[focal_idx_full]
-        sub_G   = genre_matrix[sub_idx]
-        sub_GV  = genre_valid[sub_idx]
-        bonus = np.clip(sub_G @ focal_g, 0.0, 1.0)
-        bonus = np.where(sub_GV, bonus, 0.0)
+        bonus = np.clip(genre_matrix @ focal_g, 0.0, 1.0)
+        bonus = np.where(genre_valid, bonus, 0.0)
         raw = raw + GENRE_WEIGHT * bonus
 
-    # Pin focal at the top so it always survives the threshold.
-    focal_pos = int(np.where(sub_idx == focal_idx_full)[0][0])
-    raw[focal_pos] = float(raw.max()) + GENRE_WEIGHT + 1.0
+    # Pin focal at the top so it always sits in the global survivor set.
+    raw[focal_idx_full] = float(raw.max()) + GENRE_WEIGHT + 1.0
 
     r_min, r_max = float(raw.min()), float(raw.max())
     spread = r_max - r_min
@@ -288,19 +293,27 @@ def filter_by_similarity_fast(
         norm_scores = np.full_like(raw, 0.5)
 
     threshold = float(np.percentile(norm_scores, percentile))
-    keep = norm_scores >= threshold
-    keep[focal_pos] = True
+    keep_global = norm_scores >= threshold
+    keep_global[focal_idx_full] = True
+
+    in_subset = np.zeros(N, dtype=bool)
+    in_subset[sub_idx] = True
+    keep = keep_global & in_subset
+
     if keep.sum() < 2:
-        # Force at least one neighbour besides the focal.
-        order = np.argsort(-norm_scores)
+        # Guarantee at least 2 survivors (focal if it's in subset, plus one
+        # neighbour) so the chip never collapses the alive set on its own.
+        sub_scores = np.where(in_subset, norm_scores, -np.inf)
+        order = np.argsort(-sub_scores)
         for j in order:
-            if int(j) == focal_pos:
-                continue
+            if not np.isfinite(sub_scores[int(j)]):
+                break
             keep[int(j)] = True
-            break
+            if keep.sum() >= 2:
+                break
 
     survivors = [
-        (int(sub_idx[i]), float(round(norm_scores[i], 4)))
+        (int(i), float(round(norm_scores[i], 4)))
         for i in np.where(keep)[0]
     ]
     survivors.sort(key=lambda t: t[1], reverse=True)
