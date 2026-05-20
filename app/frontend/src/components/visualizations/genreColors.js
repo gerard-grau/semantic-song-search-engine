@@ -1,4 +1,4 @@
-// 11-label taxonomy — keep in sync with data_pipeline/_genres.py::GENRES.
+// 9-label taxonomy — keep in sync with data_pipeline/_genres.py::GENRES.
 // Hue spacing chosen so adjacent buckets stay distinguishable in the scatter.
 export const GENRE_COLORS = {
   "cançó d'autor": '#7E57C2', // violet — singer-songwriter tradition
@@ -8,8 +8,6 @@ export const GENRE_COLORS = {
   'pop':           '#00BFA5', // teal — indie-pop / pop-folk
   'rumba':         '#FF8A65', // warm orange — rumba catalana
   'música urbana': '#FFB74D', // mango — hip-hop / trap / urbano
-  'electrònica':   '#AB47BC', // purple — synth-pop / dance / electronic
-  'jazz':          '#8D6E63', // mocha — Catalan jazz scene
   'infantil':      '#FFEB3B', // yellow — children's music
   'mestissa':      '#66BB6A', // green — ska / reggae / cumbia fusion
 }

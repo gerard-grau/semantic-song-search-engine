@@ -34,8 +34,6 @@ GENRES: tuple[str, ...] = (
     "pop",
     "rumba",
     "música urbana",
-    "electrònica",
-    "jazz",
     "infantil",
     "mestissa",
 )
