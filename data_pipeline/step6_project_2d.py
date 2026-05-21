@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 def _emb_to_array(val) -> np.ndarray:
     if val is None:
         return np.empty(0, dtype=np.float32)
+    if isinstance(val, bytes):
+        val = val.decode("utf-8")
     if isinstance(val, str):
         s = val.strip()
         if s.startswith("[") and s.endswith("]"):
