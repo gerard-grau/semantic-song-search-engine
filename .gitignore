@@ -58,4 +58,5 @@ app/frontend/.vite/
 app/backend/data/raw/
 app/backend/data/processed/
 app/backend/data/*
+ml/embeddings/embedded_songs_dataset/
 claude_start.sh
