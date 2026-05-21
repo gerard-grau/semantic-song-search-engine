@@ -1,16 +1,18 @@
 # Setup — Windows natiu (sense WSL)
 
-Guia per a Windows 10/11 amb Python instal·lat al sistema. Tot el codi corre a Powershell. Si t'és més còmode, mira [`README_WSL.md`](README_WSL.md) (és més robust).
+Guia per a Windows 10/11 amb Python instal·lat al sistema. Tot el codi corre a PowerShell. Si t'és més còmode, mira [`README_WSL.md`](README_WSL.md) — és més robust per al parquet de 5 GB.
 
 ## 0. Prerequisits
 
-Instal·la les eines bàsiques (administrador):
+Instal·la les eines bàsiques (com a Administrador):
 
 1. **Git for Windows** — <https://git-scm.com/download/win>
-2. **Python 3.11** — <https://www.python.org/downloads/> ✅ "Add Python to PATH"
+2. **Python 3.11** — <https://www.python.org/downloads/>  ✅ "Add Python to PATH"
 3. **Node.js 20 LTS** — <https://nodejs.org/>
-4. **Docker Desktop** — <https://www.docker.com/products/docker-desktop/> (necessari per Qdrant)
-5. Reinicia el terminal després de cada instal·lador.
+4. **Docker Desktop** — <https://www.docker.com/products/docker-desktop/>
+5. **7-Zip** — <https://www.7-zip.org/> (`Expand-Archive` no gestiona bé arxius de >4 GB)
+
+Reinicia el terminal després de cada instal·lador.
 
 Obre **PowerShell** (no CMD) per a la resta dels passos.
 
@@ -31,7 +33,7 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Si PowerShell bloqueja l'activació, executa una vegada com a administrador:
+Si PowerShell bloqueja l'activació:
 
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
@@ -39,7 +41,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 3. Variables d'entorn
 
-Crea `.env` a l'arrel del repo amb aquest contingut:
+Crea `.env` a l'arrel amb el bloc de notes (guardat **sense extensió** `.txt`):
 
 ```
 DB_HOST=aulagpus.fib.upc.edu
@@ -49,22 +51,26 @@ DB_PASSWORD=bernatpudent
 DB_NAME=viasona
 ```
 
-(Pots fer-ho amb el bloc de notes, **guardat com `.env`** sense extensió `.txt`.)
-
 ## 4. Posar les dades base
 
-Posa `dades.zip` a l'arrel del repo i descomprimeix. Des de PowerShell:
+Posa `dades.zip` a l'arrel del repo. Des de PowerShell, amb 7-Zip (necessari per a arxius >4 GB; `Expand-Archive` natiu falla):
 
 ```powershell
+& "C:\Program Files\7-Zip\7z.exe" x .\dades.zip
+
 mkdir app\backend\data\raw -Force | Out-Null
 mkdir app\backend\data\processed -Force | Out-Null
-Expand-Archive -Path .\dades.zip -DestinationPath . -Force
-Move-Item .\embedded_songs.parquet .\app\backend\data\raw\ -Force
-Move-Item .\augmented_songs.csv    .\app\backend\data\raw\ -Force
-Move-Item .\entrances_exits.csv    .\app\backend\data\raw\ -Force
+mkdir ml\embeddings\embedded_songs_dataset -Force | Out-Null
+mkdir $HOME\qdrant_snapshots -Force | Out-Null
+
+Move-Item .\dades_pack\raw\* .\app\backend\data\raw\ -Force
+Move-Item .\dades_pack\embedded_songs_dataset\* .\ml\embeddings\embedded_songs_dataset\ -Force
+Move-Item .\dades_pack\snapshots\*.snapshot $HOME\qdrant_snapshots\ -Force
+
+Remove-Item .\dades_pack -Recurse -Force
 ```
 
-## 5. Aixecar Qdrant amb el volum pre-poblat
+## 5. Aixecar Qdrant amb Docker Desktop
 
 Assegura't que Docker Desktop està obert. Llavors:
 
@@ -72,8 +78,39 @@ Assegura't que Docker Desktop està obert. Llavors:
 docker run -d `
   --name qdrant_server `
   -p 6333:6333 -p 6334:6334 `
-  -v "${PWD}\qdrant_storage:/qdrant/storage" `
-  qdrant/qdrant
+  -v "${HOME}\qdrant_storage:/qdrant/storage" `
+  -v "${HOME}\qdrant_snapshots:/qdrant/snapshots" `
+  qdrant/qdrant:v1.18.0
+```
+
+Comprova:
+
+```powershell
+curl.exe http://localhost:6333/
+```
+
+(`curl.exe` és imprescindible — `curl` a PowerShell és un àlies d'`Invoke-WebRequest`.)
+
+## 6. Restaurar `songs_lyrics_chunks`
+
+Identifica el fitxer i el seu nom dins del contenidor Docker:
+
+```powershell
+$snapName = (Get-ChildItem $HOME\qdrant_snapshots\songs_lyrics_chunks-*.snapshot | Select-Object -First 1).Name
+echo $snapName
+
+curl.exe -X PUT "http://localhost:6333/collections/songs_lyrics_chunks/snapshots/recover" `
+  -H "Content-Type: application/json" `
+  -d "{\""location\"": \""file:///qdrant/snapshots/$snapName\""}"
+```
+
+(El path `file:///qdrant/snapshots/...` és **dins del contenidor**, no del host.)
+
+## 7. Reindexar `songs_qualitative`
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES = ""
+python -m ml.embeddings.index_qdrant_docker --only-qualitative
 ```
 
 Comprova:
@@ -82,21 +119,21 @@ Comprova:
 curl.exe http://localhost:6333/collections
 ```
 
-(`curl.exe` és imprescindible perquè a Windows `curl` és un àlies d'`Invoke-WebRequest`.)
-
-## 6. Generar la resta d'artefactes
+## 8. Generar processed
 
 ```powershell
 python -m data_pipeline.execute_all
 ```
 
-## 7. Arrencar el backend
+## 9. Arrencar el backend
 
 ```powershell
 uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-## 8. Arrencar el frontend
+> **Primer arrencament**: descarrega `BAAI/bge-m3` (~2.3 GB) i el cross-encoder (~120 MB). 5-10 min.
+
+## 10. Arrencar el frontend
 
 En una **segona** PowerShell, des de l'arrel del repo:
 
@@ -110,7 +147,7 @@ Obre <http://localhost:5173>.
 
 ## Problemes coneguts amb Windows natiu
 
+- **`Expand-Archive` falla** amb `dades.zip` → usa 7-Zip (és per això que és prerequisit).
 - **`torch`/`transformers`** poden trigar a compilar. Si vols GPU, instal·la la wheel CUDA específica: `pip install torch --index-url https://download.pytorch.org/whl/cu121`.
-- Si Docker Desktop no està actiu, `docker run` fallarà silenciosament des de PowerShell.
-- Tots els paths amb `\` són equivalents als `/` de Linux a les rutes Python; els scripts del repo els generen tots dos.
-- Si tens problemes per executar `python -m data_pipeline.execute_all`, comprova que `(venv) PS C:\...\>` apareix al prompt (vol dir que el venv està actiu).
+- Si **Docker Desktop no està actiu**, `docker run` falla silenciosament.
+- Els paths amb `\` són equivalents als `/` Linux per als scripts Python; el codi del repo els accepta tots dos.

@@ -61,7 +61,7 @@ UPLOAD_EVERY = 500  # upload to Qdrant after this many chunks (controls peak RAM
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _REPO_ROOT     = Path(__file__).resolve().parent.parent.parent
 _PARQUET_DIR   = Path(__file__).resolve().parent / "embedded_songs_dataset"
-_CSV_PATH      = _REPO_ROOT / "data" / "processed" / "augmented_songs.csv"
+_CSV_PATH      = _REPO_ROOT / "app" / "backend" / "data" / "raw" / "augmented_songs.csv"
 _PROGRESS_FILE = Path(__file__).resolve().parent / ".lyrics_index_progress"
 
 
@@ -99,9 +99,12 @@ def _chunk_lyrics(lyrics: str) -> list[str]:
 
 
 def _load_meta_csv() -> pd.DataFrame:
-    return pd.read_csv(_CSV_PATH, encoding="utf-8-sig")[
-        ["id_lyrics", "artist", "title", "album", "lyrics"]
-    ].fillna("")
+    # augmented_songs.csv is latin-1 with a stray leading 0xff byte; strip
+    # non-word chars from the first header so 'id_lyrics' resolves.
+    import re
+    df = pd.read_csv(_CSV_PATH, encoding="latin-1", engine="python", on_bad_lines="skip")
+    df.columns = [re.sub(r"^[^\w]+", "", c, flags=re.ASCII).lstrip("﻿") for c in df.columns]
+    return df[["id_lyrics", "artist", "title", "album", "lyrics"]].fillna("")
 
 
 def _read_progress() -> int:
