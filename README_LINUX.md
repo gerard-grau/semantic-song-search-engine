@@ -1,84 +1,118 @@
-# Guia d'execució — Linux / Mac
+# Setup — Linux
 
-## Prerequisits
+Guia pas a pas. Assumeix una distribució recent (Ubuntu 22.04+ o equivalent) amb permisos `sudo`. Tot el text entre `…` cal substituir-lo.
 
-- **Python 3.11+**
-- **Node.js 18+** (via `nvm` o el gestor de paquets del sistema)
-- **pip** i **npm**
-
-## Pas a pas
-
-### 1. Clonar el repositori
+## 0. Prerequisits del sistema
 
 ```bash
-git clone <url-del-repo>
+sudo apt update
+sudo apt install -y git python3.11 python3.11-venv python3-pip build-essential curl
+```
+
+Instal·la Node.js 20+:
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+```
+
+Instal·la Docker (per Qdrant):
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+newgrp docker     # rellegeix grups sense tancar sessió
+```
+
+## 1. Clonar el repo
+
+```bash
+git clone <URL_DEL_REPO> semantic-song-search-engine
 cd semantic-song-search-engine
 ```
 
-### 2. Entorn virtual de Python + dependències
+## 2. Entorn Python
 
 ```bash
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Arrencar el backend (Terminal 1)
+## 3. Variables d'entorn
+
+Crea `.env` a l'arrel amb les credencials de la BD de Viasona:
 
 ```bash
-# Arrencada normal — llegeix els parquets pre-calculats (ràpid)
-python -m uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000
-
-# Forçar el recàlcul de la projecció 2D abans d'engegar l'API
-RECOMPUTE_2D=1 python -m uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000
-
-# Forçar també el recàlcul del snapshot de metadades (songs_meta.parquet)
-RECOMPUTE_META=1 python -m uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000
+cat > .env <<'EOF'
+DB_HOST=aulagpus.fib.upc.edu
+DB_PORT=60059
+DB_USER=pe
+DB_PASSWORD=bernatpudent
+DB_NAME=viasona
+EOF
 ```
 
-Generació manual dels parquets pre-calculats (recomanat un cop, abans del primer ús):
+## 4. Posar les dades base
+
+Copia `dades.zip` a l'arrel del repo i descomprimeix:
 
 ```bash
-.venv/bin/python -m app.backend.core.data_pipeline                # 2D (UMAP) + metadades
-.venv/bin/python -m app.backend.core.data_pipeline --only-meta    # només snapshot de metadades
-.venv/bin/python -m app.backend.core.data_pipeline --skip-meta    # només la projecció 2D
-.venv/bin/python -m app.backend.core.data_pipeline --method tsne  # 2D amb t-SNE
+mkdir -p app/backend/data/raw app/backend/data/processed
+unzip -o dades.zip -d .
+mv embedded_songs.parquet app/backend/data/raw/
+mv augmented_songs.csv    app/backend/data/raw/
+mv entrances_exits.csv    app/backend/data/raw/
+# El volum de Qdrant queda a ./qdrant_storage/
 ```
 
-El backend estarà a `http://127.0.0.1:8000`. Swagger UI a `http://127.0.0.1:8000/docs`.
+## 5. Aixecar Qdrant amb el volum pre-poblat
 
-### 4. Instal·lar dependències frontend (Terminal 2)
+```bash
+docker run -d \
+  --name qdrant_server \
+  -p 6333:6333 -p 6334:6334 \
+  -v "$(pwd)/qdrant_storage:/qdrant/storage" \
+  qdrant/qdrant
+```
+
+Comprova que respon:
+
+```bash
+curl http://localhost:6333/collections
+```
+
+Hi has de veure `songs_qualitative` i `songs_lyrics_chunks`.
+
+## 6. Generar la resta d'artefactes (parquets)
+
+```bash
+python -m data_pipeline.execute_all
+```
+
+Genera `cancons.csv`, `grups.csv`, `noticies.csv` (de la BD) i tots els parquets dins de `app/backend/data/processed/`.
+
+## 7. Arrencar el backend
+
+```bash
+uvicorn app.backend.api.main:app --host 127.0.0.1 --port 8000
+```
+
+Comprova:
+
+```bash
+curl http://localhost:8000/
+```
+
+## 8. Arrencar el frontend
+
+En una **segona terminal**, des de l'arrel del repo:
 
 ```bash
 cd app/frontend
 npm install
-```
-
-### 5. Arrencar el frontend
-
-```bash
 npm run dev
 ```
 
-El frontend estarà a `http://localhost:3000`.
-
-### 6. Obrir l'aplicació
-
-Ves a **http://localhost:3000** al navegador.
-
-## Instal·lació de Node.js amb nvm (opcional)
-
-```bash
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-source ~/.bashrc
-nvm install 22
-nvm use 22
-```
-
-## Resolució de problemes
-
-| Problema | Solució |
-|---|---|
-| `ImportError: Sentinel` | `pip install -U typing_extensions` |
-| `scikit-learn` no s'instal·la | `pip install scikit-learn` manualment |
-| Port 8000 ja en ús | `uvicorn ... --port 8001` i actualitza `vite.config.js` |
+Obre <http://localhost:5173>.

@@ -26,11 +26,11 @@ the same single insert/delete from "bog", and freq picks the winner.
 
 Operation costs that go into d:
 
-    transposition (swap of 2 adjacent chars)         0.5
-    insert / delete  (regular char)                  1.0
-    substitution: keys ARE adjacent on QWERTY        0.7
-    substitution: keys are NOT adjacent              2.0
-    accent / fold-equivalent                         0.1
+    transposition (swap of 2 adjacent chars)         COST_SWAP     (0.5)
+    insert / delete  (regular char)                  COST_INSERT/DELETE (1.0)
+    substitution: keys ARE adjacent on QWERTY        COST_SUB_ADJ  (0.85)
+    substitution: keys are NOT adjacent              COST_SUB_FAR  (1.5)
+    accent / fold-equivalent                         COST_ACCENT   (0.1)
         same letter modulo accent  (e ↔ é)
         ç ↔ c
         l ↔ ç-cedilla, etc.
@@ -165,8 +165,8 @@ def substitution_cost(a: str, b: str) -> float:
         identical                       → 0.0
         same letter modulo accent /     → COST_ACCENT  (0.1)
             ç ↔ c
-        adjacent QWERTY keys            → COST_SUB_ADJ (0.7)
-        anything else                   → COST_SUB_FAR (2.0)
+        adjacent QWERTY keys            → COST_SUB_ADJ (0.85)
+        anything else                   → COST_SUB_FAR (1.5)
     """
     if a == b:
         return 0.0

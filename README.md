@@ -1,20 +1,38 @@
-# Descobridor de Cançons — Semantic Song Search Engine
+# Semantic Song Search Engine
 
-Motor de cerca semàntica per cançons catalanes. L'usuari escriu consultes en llenguatge natural i l'aplicació filtra progressivament un catàleg de cançons utilitzant embeddings i projeccions t-SNE per visualitzar-les en 2D i 3D.
+Motor de cerca semàntica per al catàleg de cançons catalanes de [Viasona](https://www.viasona.cat): scatter 2D, filtres en cadena per xips, cercador instantani estil Viasona amb suggeriments semàntics.
 
-**Stack:** React + Vite (frontend) · FastAPI (backend) · deck.gl + Three.js (visualització) · scikit-learn t-SNE (projeccions)
+## Stack
 
-## Execució ràpida
+- **Backend**: FastAPI + bge-m3 (transformers) + Qdrant (docker) + pandas/pyarrow.
+- **Frontend**: React 19 + Vite 8.
+- **Pipeline offline**: scripts a `data_pipeline/` que generen tots els parquets que el backend serveix.
 
-- **Windows:** veure [README_WINDOWS.md](README_WINDOWS.md)
-- **Linux / Mac:** veure [README_LINUX.md](README_LINUX.md)
+## Setup per sistema operatiu
 
-## Documentació tècnica
+Cada guia és una **seqüència de comandes** per anar de `git clone` a tenir l'app corrent:
 
-Tots els documents tècnics estan a la carpeta [Documentacio/](Documentacio/):
+- [`README_LINUX.md`](README_LINUX.md)
+- [`README_WSL.md`](README_WSL.md)
+- [`README_WINDOWS.md`](README_WINDOWS.md)
 
-- [arquitectura_frontend.md](Documentacio/arquitectura_frontend.md) — Estructura React, flux de dades, sistema de temes
-- [arquitectura_backend.md](Documentacio/arquitectura_backend.md) — Estructura FastAPI, mòduls, funcions mock
-- [visualitzacions.md](Documentacio/visualitzacions.md) — Els 4 modes de visualització
-- [api_reference.md](Documentacio/api_reference.md) — Referència completa de l'API
-- [filtratge_progressiu.md](Documentacio/filtratge_progressiu.md) — Com funciona el filtratge pas a pas
+## Què hi ha a `dades.zip`
+
+El zip que has de baixar conté **només** el que és car de regenerar:
+
+| Fitxer / carpeta | Destí dins del repo |
+| --- | --- |
+| `embedded_songs.parquet` | `app/backend/data/raw/embedded_songs.parquet` |
+| `augmented_songs.csv` | `app/backend/data/raw/augmented_songs.csv` |
+| `entrances_exits.csv` | `app/backend/data/raw/entrances_exits.csv` (export manual de Google Analytics 4) |
+| `qdrant_storage/` | `qdrant_storage/` (volum del docker Qdrant pre-poblat) |
+
+La resta es genera amb `python -m data_pipeline.execute_all` un cop tens aquests dos fitxers i `.env` apuntant a la BD.
+
+## Documentació
+
+La carpeta [`documentació/`](documentació/) descriu fitxer per fitxer què fa cada mòdul (backend-api, backend-core, data-pipeline, ml-embeddings, frontend, config).
+
+## Llicència
+
+Propietat del projecte d'enginyeria de l'UPC. Veure el repositori original.

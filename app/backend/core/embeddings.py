@@ -7,18 +7,17 @@ models or passage formats).
 Query scoring is **multi-field late fusion**: each song carries an
 ``embedding_fields`` matrix (one row per field — lyrics, qualitative
 description, title, album, artist) and the per-song score is the max cosine
-similarity across those rows.  Effect: a query that names an artist lights
+similarity across those rows. Effect: a query that names an artist lights
 up the artist row; a query that quotes a chorus lights up the lyrics row;
 the user doesn't have to know which.
 
 Song-to-song similarity (``get_nearest_neighbors`` / ``build_neighborhood``)
-continues to use the lyrics vector only — for "show me similar songs" the
-lyrical content is what's actually meant, and using max-over-fields there
-would let two unrelated songs by the same artist look like duplicates.
+uses the lyrics vector only — for "show me similar songs" the lyrical
+content is what's actually meant, and using max-over-fields there would
+let two unrelated songs by the same artist look like duplicates.
 
-If a dimension mismatch is detected (e.g. an outdated parquet was loaded
-against a newer encoder), filter_embeddings falls back to a word-overlap
-scorer so the API stays responsive while you regenerate embeddings.
+If the embedding model is unavailable, ``filter_embeddings_fast`` falls
+back to a word-overlap scorer so the API stays responsive.
 """
 
 from __future__ import annotations
@@ -29,11 +28,7 @@ import numpy as np
 
 import config
 from app.backend.core.encoder import encode_query
-from app.backend.core.similarity import (
-    cosine_vector,
-    l2_normalize_matrix,
-    l2_normalize_vector,
-)
+from app.backend.core.similarity import cosine_vector
 
 logger = logging.getLogger(__name__)
 
@@ -58,18 +53,6 @@ GROUP_SUGGESTION_COSINE_FLOOR = config.GROUP_SUGGESTION_COSINE_FLOOR
 # (``get_visible_index``) and avoid the per-call (n, F, D) block allocation
 # that made /filter slow.  Inputs are row indices into the visible matrix;
 # outputs are (idx, score) tuples ready for the route to attach metadata.
-
-
-def _resolve_subset(song_ids: list[int] | None, index: dict) -> np.ndarray:
-    """Map a list of song ids to row indices into the visible matrix.
-
-    ``None`` selects every visible song. Unknown ids are silently dropped.
-    """
-    id_to_idx = index["id_to_idx"]
-    if song_ids is None:
-        return np.arange(len(id_to_idx), dtype=np.int64)
-    out = [id_to_idx[i] for i in song_ids if i in id_to_idx]
-    return np.asarray(out, dtype=np.int64)
 
 
 def filter_embeddings_fast(
@@ -597,89 +580,6 @@ def _word_overlap_filter_fast(
     return survivors
 
 
-def compute_similarity(query_embedding: list[float], song_embedding: list[float]) -> float:
-    """
-    Cosine similarity between two embedding vectors.
-
-    Both vectors are L2-normalised before the dot product so the result is
-    in [-1, 1].  Returns 0.0 if either vector is the zero vector.
-    """
-    q = np.array(query_embedding, dtype=np.float64)
-    s = np.array(song_embedding, dtype=np.float64)
-    q_norm = np.linalg.norm(q)
-    s_norm = np.linalg.norm(s)
-    if q_norm == 0.0 or s_norm == 0.0:
-        return 0.0
-    return float(np.dot(q, s) / (q_norm * s_norm))
-
-
-def _apply_query_genre_bonus(
-    norm_scores: np.ndarray,
-    songs: list[dict],
-    top_k: int = 25,
-) -> np.ndarray:
-    """Nudge ``norm_scores`` toward songs whose genre matches the top-K leaders.
-
-    Without query-side genre labels we can't compute the user's intended
-    genre directly. Instead we treat the centroid of the top-K leaders'
-    genre profiles as a proxy for "what genre is this query talking about",
-    then add ``GENRE_WEIGHT × cosine(centroid, song_profile)`` to each row.
-    Effect: when text similarity already crowns a coherent set of, say,
-    punk songs, other punk songs in the candidate set get a small boost —
-    pulling the result toward genre-consistent clusters without overriding
-    the text signal.
-
-    Returns the input unchanged if no song has a profile or the top-K is
-    too small / incoherent to be informative.
-    """
-    profiles = [s.get("genre_profile") for s in songs]
-    if not any(p is not None for p in profiles):
-        return norm_scores
-
-    n = len(songs)
-    if n == 0:
-        return norm_scores
-    k = min(top_k, n)
-    leader_idx = np.argpartition(-norm_scores, k - 1)[:k]
-    G = next((p.shape[0] for p in profiles if p is not None), 0)
-    if G == 0:
-        return norm_scores
-    centroid = np.zeros(G, dtype=np.float64)
-    count = 0
-    for i in leader_idx:
-        p = profiles[int(i)]
-        if p is None or p.size != G:
-            continue
-        centroid += p.astype(np.float64)
-        count += 1
-    if count == 0:
-        return norm_scores
-    centroid /= count
-    c_norm = float(np.linalg.norm(centroid))
-    if c_norm < 1e-9:
-        return norm_scores
-    centroid /= c_norm
-
-    bonus = np.zeros(n, dtype=np.float64)
-    for i, p in enumerate(profiles):
-        if p is None or p.size != G:
-            continue
-        pv = p.astype(np.float64)
-        norm = float(np.linalg.norm(pv))
-        if norm < 1e-9:
-            continue
-        bonus[i] = max(0.0, float(np.dot(centroid, pv / norm)))
-
-    out = norm_scores + GENRE_WEIGHT * bonus
-    # Re-normalise back to [0, 1] so the percentile threshold downstream
-    # keeps its calibration.
-    o_min, o_max = float(out.min()), float(out.max())
-    spread = o_max - o_min
-    if spread > 1e-6:
-        return (out - o_min) / spread
-    return out
-
-
 def _genre_bonus(focal_profile: np.ndarray | None, songs: list[dict]) -> np.ndarray:
     """Per-song genre-alignment bonus in [0, 1] aligned with ``songs``.
 
@@ -713,213 +613,6 @@ def _genre_bonus(focal_profile: np.ndarray | None, songs: list[dict]) -> np.ndar
             continue
         out[i] = max(0.0, float(np.dot(f, pv / norm)))
     return out
-
-
-def filter_embeddings(query_text: str, songs: list[dict]) -> list[dict]:
-    """
-    Progressive semantic filter with multi-field late fusion.
-
-    Given a query and the CURRENT subset of songs (already narrowed by
-    previous queries), returns a further-filtered subset with relevance scores.
-
-    Algorithm
-    ---------
-    1. Encode query_text with encoder.encode_query() → MODEL_DIM bge-m3 vector.
-    2. For each song, compute cosine similarity against every field embedding
-       (lyrics, qualitative description, title, album, artist) and take the
-       maximum.  This is late fusion: each query type naturally picks the
-       field that matches it best.
-    3. Min-max-normalise scores so the (typically narrow) cosine spread fills
-       the [0, 1] range, then keep songs above the 70th percentile.
-    4. Never return an empty list — if everything is cut, return the single
-       best-scoring song.
-
-    Fallback (dimension mismatch / missing fields)
-    ----------------------------------------------
-    If neither ``embedding_fields`` nor ``embedding`` is usable at the
-    expected dim, falls back to word-overlap scoring.
-
-    Args:
-        query_text: The user's search query.
-        songs:      Current surviving songs.  Each should have either an
-                    ``embedding_fields`` ndarray (preferred) or an
-                    ``embedding`` list (single-vector legacy path).
-    Returns:
-        Filtered list with an added ``score`` field, sorted descending.
-        Always contains ≥ 1 song.
-    """
-    if not songs:
-        return []
-
-    if not query_text.strip():
-        return [{**s, "score": 0.5} for s in songs]
-
-    # ── Encode query ──────────────────────────────────────────────────
-    try:
-        query_emb = np.array(encode_query(query_text), dtype=np.float64)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Embedding model unavailable (%s), using text fallback.", exc)
-        return _word_overlap_filter(query_text, songs)
-
-    q_norm = np.linalg.norm(query_emb)
-    if q_norm == 0.0:
-        return [{**s, "score": 0.5} for s in songs]
-
-    # ── Score every song: max cosine over fields ─────────────────────
-    raw_scores = _score_songs_multifield(query_emb, songs)
-    if raw_scores is None:
-        # Multi-field path unavailable for these songs (dim mismatch or no
-        # fields attached). Fall back to single-vector / word overlap.
-        song_dim = len(songs[0].get("embedding") or [])
-        if song_dim != len(query_emb):
-            logger.warning(
-                "Song embedding dim (%d) ≠ query embedding dim (%d). "
-                "Using text fallback — regenerate embeddings with preembedding.py.",
-                song_dim, len(query_emb),
-            )
-            return _word_overlap_filter(query_text, songs)
-        song_matrix = np.array([s["embedding"] for s in songs], dtype=np.float64)
-        raw_scores = cosine_vector(query_emb, song_matrix)
-
-    # ── Min-max normalise so scores use the full [0, 1] range ────────
-    # Embedding scores for similar-domain content (e.g. all Catalan pop songs)
-    # are tightly clustered (range ~0.06).  Without normalisation the median
-    # threshold is nearly meaningless — top and bottom songs differ by <0.01.
-    s_min, s_max = float(raw_scores.min()), float(raw_scores.max())
-    spread = s_max - s_min
-    if spread > 1e-6:
-        norm_scores = (raw_scores - s_min) / spread   # → [0, 1]
-    else:
-        norm_scores = np.full_like(raw_scores, 0.5)
-
-    # ── Small genre-alignment bonus ──────────────────────────────────────
-    # We don't have the query's genre label embeddings handy, so we derive
-    # the query's implied genre profile from the top-scoring songs (centroid
-    # of their genre profiles) and reward songs whose own profile aligns.
-    # The query-classification problem is bypassed: similar songs to those
-    # already winning on text get a nudge, similar to clustering snap-back.
-    norm_scores = _apply_query_genre_bonus(norm_scores, songs)
-
-    # ── Threshold: keep top 30 % (70th percentile of normalised scores) ──
-    # Tighter than the old median (50 %) so each query is more selective.
-    threshold = float(np.percentile(norm_scores, 70))
-    scored = [
-        {**song, "score": round(float(norm_scores[i]), 4)}
-        for i, song in enumerate(songs)
-    ]
-    survivors = [s for s in scored if s["score"] >= threshold]
-
-    if not survivors:
-        survivors = [max(scored, key=lambda s: s["score"])]
-
-    survivors.sort(key=lambda s: s["score"], reverse=True)
-    return survivors
-
-
-# ── Multi-field late fusion ──────────────────────────────────────────────────
-
-def _score_songs_multifield(
-    query_emb: np.ndarray,
-    songs: list[dict],
-) -> np.ndarray | None:
-    """
-    Per-song score = max over fields of *centered* cosine similarity to query.
-
-    Why centering: different fields have different intrinsic similarity
-    baselines against an arbitrary query (short fields like title/artist
-    cluster differently from long fields like lyrics). Without centering,
-    whichever field has the higher baseline tends to win the ``max`` and
-    the user query barely affects ranking.
-
-    The fix is per-query per-field mean subtraction: for each field we compute
-    the mean cosine across the candidate set and subtract it before taking the
-    max. What survives is "how unusually aligned with the query is this song
-    in field F, relative to a typical song in field F" — the quantity late
-    fusion is supposed to be measuring.
-
-    Returns ``None`` if the multi-field path can't be used (no fields
-    attached, or dim mismatch). On success returns an ``(n,)`` float64 vector
-    aligned with ``songs``.
-
-    Implementation: one stacked matmul into ``(n, F)`` cosines, vectorised
-    centering, vectorised max. ~1 ms for n=5000 on CPU.
-    """
-    matrices = [s.get("embedding_fields") for s in songs]
-    if not any(m is not None for m in matrices):
-        return None
-
-    expected_dim = len(query_emb)
-    n = len(songs)
-    F = max((m.shape[0] for m in matrices if m is not None), default=0)
-    if F == 0:
-        return None
-
-    # ``valid_mask[i, f]`` flags real (non-zero) field embeddings; zeros are
-    # missing data and must NOT contribute to the per-field mean.
-    block = np.zeros((n, F, expected_dim), dtype=np.float64)
-    valid_mask = np.zeros((n, F), dtype=bool)
-    for i, m in enumerate(matrices):
-        if m is None or m.size == 0:
-            continue
-        if m.shape[1] != expected_dim:
-            logger.warning(
-                "Song embedding dim (%d) ≠ query dim (%d); dropping that row.",
-                m.shape[1], expected_dim,
-            )
-            continue
-        f = min(m.shape[0], F)
-        block[i, :f, :] = m[:f]
-        valid_mask[i, :f] = True
-    if not valid_mask.any():
-        return None
-
-    q = query_emb / max(float(np.linalg.norm(query_emb)), 1e-12)
-    sims = np.clip(block.reshape(n * F, expected_dim) @ q, -1.0, 1.0).reshape(n, F)
-
-    # Per-field mean across the *candidate* set (mask out missing fields so
-    # they don't drag the mean toward 0).
-    counts = valid_mask.sum(axis=0).clip(min=1)            # (F,)
-    field_mean = (sims * valid_mask).sum(axis=0) / counts  # (F,)
-    centered = sims - field_mean                            # (n, F)
-
-    # A missing field shouldn't be eligible to win the max; replace its
-    # centered value with -inf so it can never beat a real field.
-    centered = np.where(valid_mask, centered, -np.inf)
-    return centered.max(axis=1)
-
-
-# ── Fallback ──────────────────────────────────────────────────────────────────
-
-def _word_overlap_filter(query_text: str, songs: list[dict]) -> list[dict]:
-    """
-    Word-overlap scorer used when embedding dimensions don't match.
-
-    Scores each song by the fraction of query words found in its text
-    fields, then keeps every song with score ≥ median. Always returns at
-    least one survivor (the highest-scoring song).
-    """
-    words = set(query_text.lower().split())
-    scored = []
-    for song in songs:
-        searchable = " ".join([
-            song.get("title", ""),
-            song.get("artist", ""),
-            song.get("lyrics_snippet", ""),
-            song.get("album", ""),
-            song.get("genre", ""),
-        ]).lower().split()
-        searchable_set = set(searchable)
-        overlap = len(words & searchable_set) / max(len(words), 1)
-        # Map to [0.1, 0.9] so the range is meaningful
-        score = round(0.1 + overlap * 0.8, 4)
-        scored.append({**song, "score": score})
-
-    threshold = float(np.median([s["score"] for s in scored]))
-    survivors = [s for s in scored if s["score"] >= threshold]
-    if not survivors:
-        survivors = [max(scored, key=lambda s: s["score"])]
-
-    return sorted(survivors, key=lambda s: s["score"], reverse=True)
 
 
 def build_neighborhood(
@@ -1000,61 +693,6 @@ def build_neighborhood(
                     neighborhood_ids.add(b_song["id"])
 
     return result
-
-
-def filter_by_similarity(
-    focal_id: int,
-    songs: list[dict],
-    percentile: float = 70.0,
-) -> list[dict]:
-    """Song-to-song similarity filter used by the "search similar" chip.
-
-    Combines L2 cosine over lyrics with a small genre-profile alignment
-    bonus (controlled by ``GENRE_WEIGHT``), then keeps songs above
-    ``percentile`` of the normalised score. Always returns the focal song
-    plus at least one other survivor.
-    """
-    if not songs:
-        return []
-    focal_idx = next((i for i, s in enumerate(songs) if s["id"] == focal_id), None)
-    if focal_idx is None:
-        return []
-
-    try:
-        matrix = np.array([s["embedding"] for s in songs], dtype=np.float64)
-    except (TypeError, ValueError):
-        return []
-    if matrix.size == 0 or matrix.shape[1] == 0:
-        return []
-
-    sims = cosine_vector(matrix[focal_idx], matrix)
-    bonus = _genre_bonus(songs[focal_idx].get("genre_profile"), songs)
-    raw = sims + GENRE_WEIGHT * bonus
-    raw[focal_idx] = 1.0 + GENRE_WEIGHT  # guarantee focal stays on top
-
-    s_min, s_max = float(raw.min()), float(raw.max())
-    spread = s_max - s_min
-    if spread > 1e-6:
-        norm_scores = (raw - s_min) / spread
-    else:
-        norm_scores = np.full_like(raw, 0.5)
-
-    threshold = float(np.percentile(norm_scores, percentile))
-    survivors: list[dict] = []
-    for i, song in enumerate(songs):
-        if i == focal_idx or norm_scores[i] >= threshold:
-            survivors.append({**song, "score": round(float(norm_scores[i]), 4)})
-
-    if len(survivors) < 2:
-        order = np.argsort(-norm_scores)
-        for i in order:
-            if int(i) == focal_idx:
-                continue
-            survivors.append({**songs[int(i)], "score": round(float(norm_scores[int(i)]), 4)})
-            break
-
-    survivors.sort(key=lambda s: s["score"], reverse=True)
-    return survivors
 
 
 def get_nearest_neighbors(focal_id: int, songs: list[dict], n: int = 20) -> list[dict]:
