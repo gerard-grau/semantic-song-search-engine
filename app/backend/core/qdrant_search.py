@@ -252,7 +252,6 @@ def _keyword_lyrics_search(
                 limit=fetch,
                 with_payload=True,
                 score_threshold=0.0,
-                search_params=SearchParams(exact=True),
             )
             return r.points
         except Exception as exc:
@@ -511,7 +510,6 @@ def search_lyrics_chunks(
             query_filter=_payload_filter(artist_filter),
             with_payload=True,
             score_threshold=threshold,
-            search_params=SearchParams(exact=True),
         )
     except Exception as exc:
         logger.warning("Qdrant lyrics search error: %s", exc)
@@ -537,7 +535,7 @@ def search_lyrics_chunks(
     dense_ranked = sorted(best_dense.values(), key=lambda x: x["score"], reverse=True)
 
     # ── Keyword-filtered dense search + RRF (when query_text supplied) ─────────
-    ce_pool = 100  # candidates fed to the cross-encoder
+    ce_pool = 30  # candidates fed to the cross-encoder
     keywords = _extract_keywords(query_text) if query_text else []
     if keywords:
         kw_results = _keyword_lyrics_search(
