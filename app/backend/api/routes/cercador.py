@@ -26,11 +26,15 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 from fastapi import APIRouter
 
 from app.backend.core.cercador_index import derive_correction, get_index
 from app.backend.core.data_loader import get_visible_index
-from app.backend.core.embeddings import compute_cercador_suggestions
+from app.backend.core.embeddings import (
+    compute_cercador_suggestions,
+    compute_group_extra,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,31 +143,172 @@ def _parse_exclude_names(raw: str) -> set[str]:
 
 
 @router.get("/cercador/suggestions")
-def cercador_suggestions(q: str = "", exclude_ids: str = "", exclude_groups: str = ""):
+def cercador_suggestions(
+    q: str = "",
+    exclude_ids: str = "",
+    exclude_groups: str = "",
+    artist_filter: str = "",
+    mode: str = "all",
+):
     """Embedding-based companion to ``/api/cercador``.
 
     Response shape::
 
         {
           "suggestions":  [ { id, title, artist, lyrics_snippet,
-                              genre, url, score }, … ],   # top 4
+                              genre, url, score }, … ],   # top 5
           "lyrics_extra": [ { id, title, artist, lyrics_snippet,
-                              genre, url, score }, … ],   # top 2
-          "group_extra":  null | { …grup_result fields…, score },  # top 0–1
+                              genre, url, score }, … ],   # top 3
+          "group_extra":  null | { …grup_result fields…, score },  # 0–1
         }
 
-    ``score`` is cosine in [0, 1]. ``exclude_ids`` excludes songs already
-    shown in the Lletres column; ``exclude_groups`` (comma-separated artist
-    names) excludes groups already shown in the Grups column. Both keep
-    the embedding extras strictly *new* hits.
+    When a Docker Qdrant instance is running and indexed (via
+    ``ml/embeddings/index_qdrant_docker.py``), song results come from:
+
+      * ``suggestions``  — qualitative_description collection (mood/theme)
+      * ``lyrics_extra`` — lyrics-chunks collection (chunked-lyrics recall)
+
+    When Qdrant is unavailable the endpoint falls back to the dense visible
+    index matmul (top-5000 songs only, same as the old behaviour).
+
+    ``artist_filter`` (optional) narrows both Qdrant collections to songs by
+    that exact artist name via a Qdrant payload filter.
+
+    ``exclude_ids`` / ``exclude_groups`` keep embedding extras strictly new.
     """
     q = q.strip()
+    artist_filter = artist_filter.strip() or None
+    mode = mode.strip() or "all"
+
     if not q:
-        return {"suggestions": [], "lyrics_extra": [], "group_extra": None}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": []}
 
     excluded_ids   = _parse_exclude_ids(exclude_ids)
     excluded_names = _parse_exclude_names(exclude_groups)
 
+    # ── Matrix mode: bypass Qdrant entirely ───────────────────────────────────
+    if mode == "matrix":
+        return _matrix_suggestions(q, excluded_ids, excluded_names)
+
+    # ── Qdrant path ────────────────────────────────────────────────────────────
+    qdrant_result = _qdrant_suggestions(q, excluded_ids, excluded_names, artist_filter, mode)
+    if qdrant_result is not None:
+        return qdrant_result
+
+    # ── Matrix fallback (Qdrant unavailable) ──────────────────────────────────
+    return _matrix_suggestions(q, excluded_ids, excluded_names)
+
+
+# ── Qdrant path helpers ────────────────────────────────────────────────────────
+
+def _qdrant_suggestions(
+    q: str,
+    excluded_ids: set[int],
+    excluded_names: set[str],
+    artist_filter: str | None,
+    mode: str = "all",
+) -> dict | None:
+    """Try Qdrant; return a complete response dict or None if unavailable.
+
+    mode controls which collections are searched:
+      "all"         — qualitative + lyrics chunks (default)
+      "lyrics"      — lyrics chunks only (passage matching)
+      "qualitative" — qualitative descriptions only (theme/mood)
+    """
+    from app.backend.core import qdrant_search  # lazy import — avoids startup cost
+
+    if not qdrant_search.is_available():
+        return None
+
+    from app.backend.core.encoder import encode_query
+
+    try:
+        q_arr = np.asarray(encode_query(q), dtype=np.float32)
+        q_norm = float(np.linalg.norm(q_arr))
+        if q_norm > 1e-12:
+            q_arr = q_arr / q_norm
+        q_vec = q_arr.tolist()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Encoder unavailable for Qdrant path (%s)", exc)
+        return None
+
+    use_qual   = mode in ("all", "qualitative")
+    use_lyrics = mode in ("all", "lyrics")
+    use_title  = mode == "title"
+
+    qual_results: list[dict] | None = []
+    if use_qual:
+        qual_results = qdrant_search.search_qualitative(
+            q_vec, limit=7, artist_filter=artist_filter, exclude_ids=excluded_ids,
+        )
+
+    lyrics_results: list[dict] | None = []
+    if use_lyrics:
+        lyrics_results = qdrant_search.search_lyrics_chunks(
+            q_vec, limit=7, artist_filter=artist_filter, exclude_ids=excluded_ids,
+            query_text=q,
+        )
+
+    title_results: list[dict] | None = []
+    if use_title:
+        # Title mode doesn't exclude lexical hits — the user explicitly asked
+        # "what's titled X?", so the answer should appear even if Lletres
+        # already has it.
+        title_results = qdrant_search.search_by_title(
+            q_vec, limit=7, artist_filter=artist_filter, exclude_ids=set(),
+        )
+
+    if qual_results is None or lyrics_results is None or title_results is None:
+        # Qdrant became unavailable mid-request; fall back to matrix
+        return None
+
+    # Enrich with genre / url / lyrics_snippet from the visible index
+    try:
+        index      = get_visible_index()
+        id_to_song = {s["id"]: s for s in index["songs"]}
+    except Exception:
+        index      = None
+        id_to_song = {}
+
+    def _enrich(r: dict) -> dict:
+        meta = id_to_song.get(r["id"], {})
+        return {
+            **r,
+            "genre": meta.get("genre", ""),
+            "url":   meta.get("url", ""),
+            "lyrics_snippet": r.get("lyrics_snippet") or meta.get("lyrics_snippet", ""),
+        }
+
+    # Route results to the right slots depending on mode:
+    #   "qualitative" → qualitative description → suggestions
+    #   "lyrics"      → lyrics chunks (CE reranked) → suggestions
+    #   "title"       → title embedding → suggestions
+    #   "all"         → qualitative → suggestions, lyrics → lyrics_extra
+    if mode == "lyrics":
+        suggestions  = [_enrich(r) for r in lyrics_results]
+        lyrics_extra = []
+    elif mode == "title":
+        suggestions  = [_enrich(r) for r in title_results]
+        lyrics_extra = []
+    else:  # "all" or "qualitative"
+        suggestions  = [_enrich(r) for r in qual_results]
+        lyrics_extra = [_enrich(r) for r in lyrics_results]
+
+    # group_extra via artist embedding column (one matmul, no second encode)
+    group_extra = []
+    if index is not None:
+        ge = compute_group_extra(q_arr, index, exclude_artist_names=excluded_names)
+        group_extra = [_build_group_extra(name, score) for name, score in ge]
+
+    return {"suggestions": suggestions, "lyrics_extra": lyrics_extra, "group_extra": group_extra}
+
+
+def _matrix_suggestions(
+    q: str,
+    excluded_ids: set[int],
+    excluded_names: set[str],
+) -> dict:
+    """Existing matrix-based fallback (top-5000 visible songs)."""
     try:
         index = get_visible_index()
     except Exception as exc:  # noqa: BLE001
@@ -178,39 +323,26 @@ def cercador_suggestions(q: str = "", exclude_ids: str = "", exclude_groups: str
     )
     songs = index["songs"]
 
-    group_extra = None
-    if scored["group_extra"]:
-        artist_name, score = scored["group_extra"][0]
-        grup_record = get_index().find_grup_by_name(artist_name)
-        # If we have an embedding-strong artist but no grups.csv record for
-        # them, surface a minimal stub instead of dropping the suggestion
-        # entirely — the user still wants to see "we found this artist".
-        if grup_record is not None:
-            group_extra = {
-                **_grup_result(grup_record),
-                "score": round(max(0.0, min(1.0, float(score))), 4),
-            }
-        else:
-            group_extra = {
-                "id":           0,
-                "name":         artist_name,
-                "song_count":   0,
-                "viasona_link": "",
-                "foto":         "",
-                "municipi":     "",
-                "regio":        "",
-                "genres":       [],
-                "score":        round(max(0.0, min(1.0, float(score))), 4),
-            }
+    group_extra = [
+        _build_group_extra(name, score)
+        for name, score in scored["group_extra"]
+    ]
 
     return {
-        "suggestions": [
-            _suggestion_result(songs[i], score)
-            for i, score in scored["suggestions"]
-        ],
-        "lyrics_extra": [
-            _suggestion_result(songs[i], score)
-            for i, score in scored["lyrics_extra"]
-        ],
-        "group_extra": group_extra,
+        "suggestions":  [_suggestion_result(songs[i], sc) for i, sc in scored["suggestions"]],
+        "lyrics_extra": [_suggestion_result(songs[i], sc) for i, sc in scored["lyrics_extra"]],
+        "group_extra":  group_extra,
+    }
+
+
+def _build_group_extra(artist_name: str, score: float) -> dict:
+    """Build a group_extra dict from an artist name and cosine score."""
+    grup_record = get_index().find_grup_by_name(artist_name)
+    clamped = round(max(0.0, min(1.0, float(score))), 4)
+    if grup_record is not None:
+        return {**_grup_result(grup_record), "score": clamped}
+    return {
+        "id": 0, "name": artist_name, "song_count": 0,
+        "viasona_link": "", "foto": "", "municipi": "", "regio": "", "genres": [],
+        "score": clamped,
     }

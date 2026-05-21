@@ -384,21 +384,21 @@ def compute_cercador_suggestions(
     matrix = index["matrix"]   # (N, F, D), L2-normalised
     valid  = index["valid"]    # (N, F)
     if matrix.size == 0:
-        return {"suggestions": [], "lyrics_extra": []}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": []}
 
     N, F, D = matrix.shape
     if F == 0 or D == 0:
-        return {"suggestions": [], "lyrics_extra": []}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": []}
 
     try:
         q = np.asarray(encode_query(query_text), dtype=np.float32)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Suggestions: encoder unavailable (%s)", exc)
-        return {"suggestions": [], "lyrics_extra": []}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": []}
 
     q_norm = float(np.linalg.norm(q))
     if q_norm < 1e-12:
-        return {"suggestions": [], "lyrics_extra": []}
+        return {"suggestions": [], "lyrics_extra": [], "group_extra": []}
     q = q / q_norm
 
     # One matmul → every (song, field) cosine in (N, F).
@@ -486,19 +486,84 @@ def compute_cercador_suggestions(
                 name = (s.get("artist") or "").strip()
                 if name and name in exclude_artist_names:
                     artist_masked[i] = -np.inf
-        if np.isfinite(artist_masked).any():
-            best = int(np.argmax(artist_masked))
-            best_cos = float(artist_masked[best])
-            if best_cos >= GROUP_SUGGESTION_COSINE_FLOOR:
-                name = (index["songs"][best].get("artist") or "").strip()
-                if name:
-                    group_extra = [(name, best_cos)]
+        # Deduplicate by artist name, then return top-3 above the floor.
+        seen_artists: set[str] = set()
+        songs_meta = index["songs"]
+        for idx in np.argsort(-artist_masked):
+            cos = float(artist_masked[idx])
+            if cos < GROUP_SUGGESTION_COSINE_FLOOR or not np.isfinite(cos):
+                break
+            name = (songs_meta[int(idx)].get("artist") or "").strip()
+            if name and name not in seen_artists:
+                seen_artists.add(name)
+                group_extra.append((name, cos))
+                if len(group_extra) >= 3:
+                    break
 
     return {
         "suggestions":  suggestions,
         "lyrics_extra": lyrics_extra,
         "group_extra":  group_extra,
     }
+
+
+def compute_group_extra(
+    q: np.ndarray,
+    index: dict,
+    exclude_artist_names: set[str] | None = None,
+) -> list[tuple[str, float]]:
+    """Return the top-1 artist match using the pre-computed query vector.
+
+    Cheaper than ``compute_cercador_suggestions`` when Qdrant handles the
+    song slots and we only need the group_extra — does a single artist-column
+    matmul instead of the full (N, F, D) pass.
+
+    Args:
+        q: L2-normalised float32 query vector (MODEL_DIM,).
+        index: Visible-song index from ``data_loader.get_visible_index()``.
+        exclude_artist_names: Artists already shown in the lexical column.
+
+    Returns:
+        List of 0 or 1 ``(artist_name, raw_cosine)`` tuples.
+    """
+    matrix = index.get("matrix")
+    valid  = index.get("valid")
+    if matrix is None or matrix.size == 0:
+        return []
+
+    N, F, D = matrix.shape
+    if ARTIST_FIELD_IDX >= F:
+        return []
+
+    artist_vecs   = matrix[:, ARTIST_FIELD_IDX, :]   # (N, D)
+    artist_valid  = valid[:, ARTIST_FIELD_IDX]        # (N,)
+    artist_sims   = artist_vecs @ q                   # (N,)
+    artist_masked = np.where(artist_valid, artist_sims, -np.inf)
+
+    if exclude_artist_names:
+        songs_meta = index.get("songs", [])
+        for i, s in enumerate(songs_meta):
+            name = (s.get("artist") or "").strip()
+            if name and name in exclude_artist_names:
+                artist_masked[i] = -np.inf
+
+    if not np.isfinite(artist_masked).any():
+        return []
+
+    songs_meta = index.get("songs") or []
+    seen_artists: set[str] = set()
+    results: list[tuple[str, float]] = []
+    for idx in np.argsort(-artist_masked):
+        cos = float(artist_masked[idx])
+        if cos < GROUP_SUGGESTION_COSINE_FLOOR or not np.isfinite(cos):
+            break
+        name = (songs_meta[int(idx)].get("artist") or "").strip()
+        if name and name not in seen_artists:
+            seen_artists.add(name)
+            results.append((name, cos))
+            if len(results) >= 3:
+                break
+    return results
 
 
 def _word_overlap_filter_fast(
