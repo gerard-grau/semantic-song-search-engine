@@ -168,7 +168,7 @@ CERCADOR_RECONSTRUCT_MIN_JOINT_PROB = 0.05  # drop reconstructions below this
 
 # Per-source top-K limits returned by /api/cercador.
 CERCADOR_TOP_GRUPS = 5
-CERCADOR_TOP_SONGS = 8
+CERCADOR_TOP_SONGS = 6
 CERCADOR_TOP_NOTICIES = 5
 
 # Phrase-edit-distance rerank (only fires for multi-token queries) —

@@ -618,7 +618,7 @@ export default function CercadorPage({ theme, onToggleTheme, onBack, onDescobrei
                               )}
                             </div>
                           ))}
-                          {cancons.length >= 8 && (
+                          {cancons.length >= 6 && (
                             <div className="cercador-more">Veure'n més →</div>
                           )}
                         </div>
