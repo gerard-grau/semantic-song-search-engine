@@ -56,6 +56,21 @@ need to be plausible for the pair to score, but a strong half partly
 makes up for a weaker one. The pair is reported as a single key
 "left right" (with the recovered space).
 
+Author boost
+------------
+
+To favour corrections that land on the artists of popular Catalan
+songs over corrections that land on incidental common-word neighbours,
+any candidate whose word matches a token derived from the hardcoded
+``_TOP_1000_AUTHORS`` list (extracted from the top-1000 entries of
+``top_5000_songs.csv``) has its freq factor treated as if its raw
+frequency were FREQ_REF — saturating freq_factor to 1.0. The boost
+applies to the input word itself, to fuzzy-lexicon candidates, and to
+each half of a pair-of-words split. Stopwords that happen to appear
+in artist names ("el", "la", "de"…) already have freq_factor ≈ 1.0
+from their natural frequency, so the boost is a no-op for them; it
+only meaningfully lifts rare names like "llach" or "txarango".
+
 Normalisation
 -------------
 
@@ -279,6 +294,379 @@ def split_words(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Top-1000 song authors — hardcoded for the freq-factor boost
+# ---------------------------------------------------------------------------
+#
+# Snapshot of the distinct ``artist`` values appearing in the top-1000 rows
+# of ``app/backend/data/processed/top_5000_songs.csv`` (multi-artist cells
+# split on commas, first-occurrence order preserved). This list is frozen
+# in code intentionally: the parser must not have a data-load dependency
+# on the CSV at import time, and ranking should be reproducible across
+# environments. Regenerate by re-running the extraction snippet documented
+# alongside the CSV if the corpus is refreshed.
+
+_TOP_1000_AUTHORS: tuple[str, ...] = (
+    'Lluís Llach',
+    'Txarango',
+    'Els Pets',
+    'De Calaix',
+    'Sisa',
+    'Els Amics de les Arts',
+    'La Gossa Sorda',
+    'Companyia El Petit Príncep',
+    "Lax'n'Busto",
+    'La Ludwig Band',
+    'Xesco Boix',
+    'Joan Manuel Serrat',
+    'Josep Maria Espinàs',
+    'Dagoll Dagom',
+    'Mainasons',
+    'Judit Neddermann',
+    'Pau Figueres',
+    'Joan Dausà',
+    'Figa Flawas',
+    'Els Catarres',
+    'Raimon',
+    "S'Albaida",
+    'Siderland',
+    'Vers endins',
+    "Pep Gimeno 'Botifarra'",
+    'Maria del Mar Bonet',
+    'Alosa',
+    'Banda Neon',
+    '31 FAM',
+    'Flashy Ice Cream',
+    'Oques Grasses',
+    "Els Pescadors de L'Escala",
+    'Esquirols',
+    'Àlex Pérez',
+    'Eva Sola',
+    'Al Tall',
+    'Sau',
+    'Ara va de bo',
+    'Ginestà',
+    'Dani Miquel',
+    'La Pataqueta',
+    'Club Súper 3',
+    'Buhos',
+    'Sergi Dantí',
+    'Nina',
+    'Port Bo',
+    'Manel',
+    'Ovidi Montllor',
+    'Sexenni',
+    'Paco Muñoz',
+    'La Carxofa i la Ceba amb en Victu Allioli',
+    'La Rondalla U.M. la Nucia',
+    'Dàmaris Gelabert',
+    'Auxili',
+    'Naina',
+    'La Fúmiga',
+    'La Trinca',
+    'The Penguins',
+    'Manu Guix',
+    'Follim Follam',
+    'Xavi Lloses',
+    'Sopa de Cabra',
+    'Toni Giménez',
+    'Riu',
+    'Teràpia de Shock',
+    'Cesk Freixas',
+    'Obeses',
+    'Sílvia Pérez Cruz',
+    'Obrint Pas',
+    'Companyia Elèctrica Dharma',
+    'Porto Bello',
+    'Tacho',
+    'Xitxarel·los',
+    'Blaumut',
+    'Les Absentes',
+    'Ramon Calduch',
+    'Grup de Folk',
+    'Marina Rossell',
+    'Música Nostra',
+    'Anna Llopart i Xavi G. Cabré',
+    'Sandra Monfort',
+    'Ferrxn',
+    'Guillermina Motta',
+    'Titelles i Cançons Pamipipa',
+    'Carles Caselles',
+    'Salomé',
+    'Bajoqueta Rock',
+    'Núria Feliu',
+    'Pau Riba',
+    'Orchestra Fireluche',
+    'Cucorba',
+    'Jordi Barre',
+    "Ja t'ho diré",
+    'Ambauka',
+    'Habla de mí en presente',
+    'La Cobleta de la Selva',
+    'Roger Mas',
+    'The Companys',
+    'Malifeta',
+    'Pep Puigdemont',
+    'Com sona?',
+    'Filibusters',
+    'Markos',
+    'Emili Vendrell',
+    'Corrandes Animació',
+    'Sabor de Gràcia',
+    'Andrea Motis',
+    'Joan Chamorro Group',
+    'Guillem Ramisa',
+    'Maria Jaume',
+    'Uc',
+    'La Principal de la Bisbal',
+    'Polifònica de Puig-Reig',
+    'Els miralls de Dylan',
+    'Roger Padrós',
+    'Bohemian Betyars',
+    'Ultramar',
+    'Tomeu Penya',
+    'Tito Pontet',
+    'La Raíz',
+    'Los Chikos Del Maiz',
+    'Abril',
+    'Baya Baye MGT Los Sosis',
+    'Gato Pérez',
+    'Roba Estesa',
+    'Falsterbo Marí',
+    'El Diluvi',
+    'Partidaris',
+    'Toti Soler',
+    'Ester Formosa',
+    'Lali BeGood',
+    'Viktor Pizza',
+    'Maria Hein',
+    'Guillem Bautista',
+    'Zoo',
+    'Josep Carreras',
+    'Antònia Font',
+    'The Tyets',
+    'Mari Dolç',
+    'P.A.W.N. Gang',
+    'Cris Juanico',
+    'Carles Cases',
+    'La Bressola – Escoles Catalanes',
+    'Quart creixent',
+    'Aspencat',
+    'Laia Manzanares',
+    'Zona Local',
+    'Roslyn',
+    'Albert Pla',
+    'Ju',
+    'Alfred García',
+    'Ferran Palau',
+    'Los Beta Quartet',
+    'Dan Peralbo i El Comboi',
+    'Duo Dinámico',
+    'Al·lèrgiques al pol·len',
+    'Miki Núñez',
+    'Falsterbo 3',
+    'Kelly Isaiah',
+    'Anna Andreu',
+    'Illi-nois Folk Band',
+    'República Ska',
+    'Llacuna',
+    'Maria Helena Tolosa',
+    "El Pont d'Arcalís",
+    'Ramon Muntaner',
+    'Dyango',
+    'David Busquets',
+    'Primera Cita',
+    'Tralla',
+    'FLAKKA',
+    'Pastorets Rock',
+    'Els Dracs',
+    'Peix Fregit',
+    'Joan Isaac',
+    'Urbàlia Rurana',
+    'Lildami',
+    'Els de la Torre',
+    'Adrià Puntí',
+    'Quico el Célio',
+    'el Noi i el Mut de Ferreries',
+    'Gaietà Renom',
+    'Doctor Prats',
+    'Frank Montasell',
+    'Lydia Torrejón',
+    'Margarett',
+    'Tremendu',
+    'Mariona Escoda',
+    'Borja Penalba',
+    'Mireia Vives',
+    'Cor infantil Verge de Montserrat',
+    'Ernest Prana',
+    'Judit Farrés',
+    'Guillem Roma',
+    'Mar Pujol',
+    'Tremendamente',
+    'Família Picarol',
+    'Brams',
+    'Macedònia',
+    'Luis Aguilé',
+    'De Paper',
+    'Queta & Teo',
+    'Fetus',
+    'Filferro',
+    'Los Sirgadors',
+    'Germà Negre',
+    'Stay Homas',
+    'JULS',
+    'Coral Sant Jordi',
+    'Marina Prades',
+    'Sr. Chen',
+    'Cookah P',
+    'Raggattack',
+    'Quinto',
+    'Jordi Tonietti',
+    'Van de kul',
+    'Nastallat',
+    'Quercus',
+    'Els Atrapasomnis',
+    'Ana Torroja',
+    'Umpah-Pah',
+    'Mishima',
+    'Dany BPM',
+    'Mon Dj',
+    '2princesesbarbudes',
+    'Remigi Palmero',
+    'El Pony Pisador',
+    'Rita Payés',
+    'Remei de Ca la Fresca',
+    'Maria Amèlia Pedrerol',
+    'Cinta Massip',
+    'Xavier Ribalta',
+    'Jaume Arnella',
+    'Sangtraït',
+    'Torrat i Bullit',
+    'Mushkaa',
+    "Figues d'un altre paner",
+    'The Binigaus Band',
+    'Xiula',
+    'Joan-Pau Giné',
+    'Samantha',
+    'Andana',
+    'Boom Boom Fighters',
+    'Llengua Morta',
+    'Gerard Quintana',
+    'Mirna',
+    'Josmar',
+    'Julieta',
+    'Biel Majoral',
+    'Grimpallunes',
+    'Pablo Alborán',
+    'En Tol Sarmiento',
+    'Maria Arnal i Marcel Bagés',
+    'Jo Jet i Maria Ribot',
+    'Noa',
+    'Les anxovetes',
+    'Miquel Gil',
+    'Pep Picas',
+    'Quimi Portet',
+    'Aigua',
+    'Gertrudis',
+    'El Corral de Pepeta',
+    'Teresa Rebull',
+    'Pau Vallvé',
+    "Rovell d'ou",
+    'Aitana',
+    'Mercè Madolell',
+    'Gossos',
+    'Joan Josep Mayans',
+    'Gemma Humet',
+    'Escola Superior de Música de Catalunya',
+    'Maria Laffitte',
+    'Els 3 tambors',
+    'Rudymentari',
+    'Feliu Ventura',
+    'Miquel Abras',
+    'Will.x.o',
+    'Ceaxe',
+    'VWAE',
+    'Amadeu Casas',
+    'Animal',
+    'La Colla Pirata',
+    'Marc Vilajuana',
+    'La Tresca i la Verdesca',
+    'Adala',
+    'Peret',
+    "Anna Roig i l'Ombre de Ton Chien",
+    'Amansalva',
+    'Bernardino i el seu Grup',
+    'Cala Vento',
+    'Los Manolos',
+    'Ebri Knight',
+    'Periferia',
+    'Canimas',
+    'Família Macià',
+    'La Ratonera',
+    'Rabadàb',
+    'Joan Adrià Pistola',
+    'Els Surfing Sirles',
+    'Joan-Llorenç Solé',
+    'Lo Pardal Roquer',
+    'Xerramequ Tiquis Miquis',
+    'Núria Lozano',
+    'Mak & Sak feat. Xana',
+    'Renaldo & Clara',
+    'Clara',
+    'Rafael Subirachs',
+    'Marala',
+    'Xanguito',
+    'Pilseners',
+    'La Pegatina',
+    'Dijous Paella',
+    'gavina.mp3',
+    'Cap Pela',
+    'Orquestra Plateria',
+    "Els Cantaires de l'Estany",
+    'Jimmy Fontana',
+    'Romàntic Dimoni',
+    'TESA',
+    'Jordi Bardella',
+    'Emboirats',
+    'Es Revetlers',
+    'Orfeó Català',
+    'K-ZU',
+    'Strombers',
+    'Jordi Vidal',
+    'Álvaro Soler',
+    'Celdoni Fonoll',
+    'Júlia Colom',
+    'roots',
+    "Ven'nus",
+    'Ai',
+    'Herbes Dolces',
+    'KOP',
+)
+
+# Distinct word-tokens appearing in any author phrase above, run through
+# the same normalise+tokenise pipeline the parser applies to query words
+# (so lookups against fuzzy candidates and lexicon entries — both already
+# lowercased and NFC-normalised — match by string equality). Built once
+# at import; a frozenset for O(1) membership in the per-candidate loop.
+_AUTHOR_WORDS: frozenset[str] = frozenset(
+    tok
+    for phrase in _TOP_1000_AUTHORS
+    for tok in tokenize(normalize(phrase))
+)
+
+
+def _author_boosted_freq_factor(word: str, freq: float) -> float:
+    """Same as :func:`freq_factor`, except a `word` in :data:`_AUTHOR_WORDS`
+    is scored as if its raw frequency were FREQ_REF — i.e. the freq factor
+    saturates to 1.0. This lifts rare artist surnames (which wordfreq
+    barely sees) so corrections aim at them in preference to common-word
+    neighbours; stopwords inside artist names are already saturated by
+    their natural freq, so the boost is a no-op for them."""
+    if word in _AUTHOR_WORDS:
+        return freq_factor(FREQ_REF)
+    return freq_factor(freq)
+
+
+# ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
 
@@ -314,7 +702,12 @@ class Parser2:
     def load_lexicon(self, min_zipf: float = 2.4, top_n: int = 100_000) -> None:
         """Fill `self.lexicon` from `wordfreq`'s Catalan list (filtered to
         zipf ≥ min_zipf) and build the 2-gram index used by per-query
-        fuzzy matching."""
+        fuzzy matching. Also inject any author tokens from
+        :data:`_AUTHOR_WORDS` that wordfreq doesn't know about, so artist
+        surnames (e.g. "buhos", "txarango") can surface as fuzzy
+        candidates — :func:`_author_boosted_freq_factor` then handles
+        ranking, saturating their freq factor to 1.0 regardless of the
+        synthetic seed frequency stored here."""
         try:
             from wordfreq import top_n_list, zipf_frequency, word_frequency
         except ImportError as e:
@@ -326,11 +719,25 @@ class Parser2:
             if len(w) < 2 or not re.search(r'[a-zàèéíòóúïüç]', w):
                 continue
             freq = max(1, int(word_frequency(w, 'ca') * 1_000_000))
-            self.lexicon[w] = freq
-            folded = _fold(w)
-            for i in range(len(folded) - 1):
-                self._lex_2gram[folded[i:i + 2]].add(w)
-        print(f"[lexicon] {len(self.lexicon):,} words")
+            self._index_word(w, freq)
+
+        injected = 0
+        for w in _AUTHOR_WORDS:
+            if w in self.lexicon:
+                continue
+            if len(w) < 2 or not re.search(r'[a-zàèéíòóúïüç]', w):
+                continue
+            self._index_word(w, 1)
+            injected += 1
+        print(f"[lexicon] {len(self.lexicon):,} words (+{injected} from authors)")
+
+    def _index_word(self, w: str, freq: int) -> None:
+        """Add `w` to the lexicon at `freq` and update the folded 2-gram
+        index used by :meth:`_fuzzy_candidates`."""
+        self.lexicon[w] = freq
+        folded = _fold(w)
+        for i in range(len(folded) - 1):
+            self._lex_2gram[folded[i:i + 2]].add(w)
 
     # ------------------------------------------------------------------
     # Public API
@@ -422,7 +829,7 @@ class Parser2:
         #    still dominate after softmax.
         in_lex = self.lexicon.get(word, 0)
         input_freq = in_lex if in_lex > 0 else self._oov_freq()
-        raw[word] = max(freq_factor(input_freq), INPUT_RAW_FLOOR)
+        raw[word] = max(_author_boosted_freq_factor(word, input_freq), INPUT_RAW_FLOOR)
 
         # 2. Fuzzy lexicon matches.
         wlen = len(word)
@@ -440,7 +847,7 @@ class Parser2:
             # L = input length so any two 1-edit candidates get the same
             # exp factor regardless of their own length (e.g. for input
             # "bog", both "bo" and "blog" share L=3, and freq decides).
-            p = distance_to_prob(d, wlen) * freq_factor(self.lexicon[cand])
+            p = distance_to_prob(d, wlen) * _author_boosted_freq_factor(cand, self.lexicon[cand])
             if p > raw.get(cand, 0.0):
                 raw[cand] = p
 
@@ -460,8 +867,8 @@ class Parser2:
             # space is one global edit, not one per half, so both halves
             # share the same exp factor and only their freqs differ.
             exp_factor = distance_to_prob(SPLIT_COST, wlen)
-            p_l = exp_factor * freq_factor(f_l)
-            p_r = exp_factor * freq_factor(f_r)
+            p_l = exp_factor * _author_boosted_freq_factor(left, f_l)
+            p_r = exp_factor * _author_boosted_freq_factor(right, f_r)
             p_pair = math.sqrt(p_l * p_r)              # geometric mean
             key = f"{left} {right}"
             if p_pair > raw.get(key, 0.0):
