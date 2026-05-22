@@ -216,8 +216,11 @@
 .choice-card--primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .choice-card--primary .choice-title,
 .choice-card--primary .choice-desc { color: var(--bg); }
-.choice-card--primary .choice-icon { background: var(--brand); color: var(--brand-ink); }
-.choice-card--primary .choice-arrow { color: var(--brand); }
+/* Dark surface → bright cyan accent (navy gets lost against near-black) */
+.choice-card--primary .choice-icon { background: var(--accent-2); color: #fff; }
+.choice-card--primary .choice-arrow { color: var(--accent-2); }
+.choice-card--primary:hover:not(:disabled),
+.choice-card--primary:focus-visible:not(:disabled) { border-color: var(--accent-2); }
 [data-theme="dark"] .choice-card--primary { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
 [data-theme="dark"] .choice-card--primary .choice-title,
 [data-theme="dark"] .choice-card--primary .choice-desc { color: var(--brand-ink); }
@@ -274,6 +277,32 @@
   font-size: var(--t-xs);
   color: var(--ink-faint);
   letter-spacing: 0.04em;
+}
+.welcome-foot-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.viasona-credit {
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+  text-decoration: none;
+  border-radius: 4px;
+  padding: 2px 4px;
+  transition: opacity var(--t-base-d) var(--ease), transform var(--t-base-d) var(--ease);
+}
+.viasona-credit img {
+  height: 26px;
+  width: auto;
+  display: block;
+}
+.viasona-credit:hover { opacity: 0.85; transform: translateY(-1px); }
+[data-theme="dark"] .viasona-credit img {
+  /* Lift the navy logo so it reads on the dark slate background */
+  filter: brightness(1.45) saturate(0.95);
 }
 
 /* ============================================================
@@ -394,7 +423,7 @@
 /* ---------- Error banner ---------- */
 .error-banner {
   padding: 10px 24px;
-  background: rgba(200, 69, 63, 0.08);
+  background: var(--brand-soft);
   color: var(--brand);
   font-size: var(--t-sm);
   font-weight: 500;
@@ -2737,7 +2766,7 @@
 .mock-legend-item--active {
   color: #fff;
   border-color: transparent;
-  box-shadow: 0 0 0 2px var(--brand-ring, rgba(200,69,63,0.25));
+  box-shadow: 0 0 0 2px var(--brand-ring);
 }
 .mock-legend-dot {
   width: 9px;

@@ -1,6 +1,6 @@
 /* ============================================================
    CANÇONER — DESIGN SYSTEM
-   Warm editorial light theme + deep slate dark theme.
+   Viasona-inspired palette: deep navy + bright cyan.
    Dual font stack: Fraunces (display) + Inter (UI).
    ============================================================ */
 
@@ -22,102 +22,118 @@ body {
   font-feature-settings: 'cv11', 'ss01', 'ss02';
 }
 
+/* Viasona-style thin cyan accent bar at the very top of every page */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--accent-2);
+  z-index: 1000;
+  pointer-events: none;
+}
+
 /* ---------- Tokens (light) ---------- */
 :root, [data-theme="light"] {
-  /* Surfaces */
-  --bg: #F7F2EA;
-  --bg-2: #EFE8DC;
+  /* Surfaces — cool light grey, like viasona.cat */
+  --bg: #F2F5FA;
+  --bg-2: #E8EEF7;
   --surface: #FFFFFF;
-  --surface-2: #FBF7F0;
+  --surface-2: #F8FAFD;
   --surface-elevated: #FFFFFF;
-  --surface-glass: rgba(255, 253, 248, 0.78);
+  --surface-glass: rgba(255, 255, 255, 0.82);
 
   /* Ink */
   --ink: #15151A;
   --ink-soft: #3D3D45;
   --ink-mute: #6B6B75;
-  --ink-faint: #A8A39B;
+  --ink-faint: #9BA1AE;
 
-  /* Brand — carmine + saffron */
-  --brand: #C8453F;
-  --brand-hover: #B23A35;
-  --brand-soft: rgba(200, 69, 63, 0.10);
-  --brand-softer: rgba(200, 69, 63, 0.05);
-  --brand-ring: rgba(200, 69, 63, 0.28);
+  /* Brand — Viasona navy + cyan */
+  --brand: #283B97;          /* viasona wordmark navy */
+  --brand-hover: #1F2F7E;
+  --brand-soft: rgba(40, 59, 151, 0.10);
+  --brand-softer: rgba(40, 59, 151, 0.05);
+  --brand-ring: rgba(40, 59, 151, 0.28);
   --brand-ink: #FFFFFF;
 
-  --accent-2: #D9883D;       /* saffron */
-  --accent-2-soft: rgba(217, 136, 61, 0.14);
+  --accent-2: #1FBEE9;       /* viasona tagline cyan */
+  --accent-2-soft: rgba(31, 190, 233, 0.16);
+  --accent-2-hover: #18A8D0;
 
   /* Borders */
-  --line: rgba(20, 20, 25, 0.10);
-  --line-strong: rgba(20, 20, 25, 0.18);
-  --line-faint: rgba(20, 20, 25, 0.05);
+  --line: rgba(20, 30, 60, 0.10);
+  --line-strong: rgba(20, 30, 60, 0.18);
+  --line-faint: rgba(20, 30, 60, 0.05);
 
   /* Shadows */
-  --shadow-xs: 0 1px 2px rgba(20, 18, 14, 0.06);
-  --shadow-sm: 0 2px 6px rgba(20, 18, 14, 0.06), 0 1px 2px rgba(20, 18, 14, 0.04);
-  --shadow-md: 0 8px 22px -8px rgba(20, 18, 14, 0.18), 0 2px 6px rgba(20, 18, 14, 0.05);
-  --shadow-lg: 0 24px 60px -20px rgba(20, 18, 14, 0.30), 0 8px 18px -8px rgba(20, 18, 14, 0.10);
-  --shadow-glow: 0 8px 40px -8px rgba(200, 69, 63, 0.45);
+  --shadow-xs: 0 1px 2px rgba(20, 30, 60, 0.06);
+  --shadow-sm: 0 2px 6px rgba(20, 30, 60, 0.07), 0 1px 2px rgba(20, 30, 60, 0.04);
+  --shadow-md: 0 8px 22px -8px rgba(20, 30, 60, 0.18), 0 2px 6px rgba(20, 30, 60, 0.06);
+  --shadow-lg: 0 24px 60px -20px rgba(20, 30, 60, 0.30), 0 8px 18px -8px rgba(20, 30, 60, 0.10);
+  --shadow-glow: 0 8px 40px -8px rgba(31, 190, 233, 0.45);
 
   /* States */
-  --hover: rgba(20, 20, 25, 0.04);
-  --active: rgba(20, 20, 25, 0.07);
-  --selection: rgba(200, 69, 63, 0.18);
+  --hover: rgba(20, 30, 60, 0.04);
+  --active: rgba(20, 30, 60, 0.07);
+  --selection: rgba(31, 190, 233, 0.30);
 
   /* Mark / chrome */
   --tooltip: #15151A;
-  --tooltip-ink: #F7F2EA;
-  --viz-bg: #EFE8DC;
-  --viz-grid: rgba(20, 20, 25, 0.06);
+  --tooltip-ink: #F2F5FA;
+  --viz-bg: #E8EEF7;
+  --viz-grid: rgba(20, 30, 60, 0.06);
 
   color-scheme: light;
 }
 
 /* ---------- Tokens (dark) ---------- */
 [data-theme="dark"] {
-  --bg: #0B0C10;
-  --bg-2: #111319;
-  --surface: #161922;
-  --surface-2: #1B1F2A;
-  --surface-elevated: #1E2230;
-  --surface-glass: rgba(20, 22, 30, 0.75);
+  /* Deep navy-tinted slate, complements the Viasona blues */
+  --bg: #0A0E1A;
+  --bg-2: #11162A;
+  --surface: #161D33;
+  --surface-2: #1B243C;
+  --surface-elevated: #1F2945;
+  --surface-glass: rgba(22, 29, 51, 0.78);
 
-  --ink: #ECE7DC;
-  --ink-soft: #B5AFA0;
-  --ink-mute: #8A8472;
-  --ink-faint: #4F4A40;
+  --ink: #E8ECF5;
+  --ink-soft: #B4BACB;
+  --ink-mute: #7E859A;
+  --ink-faint: #4A5168;
 
-  /* Brand flips to warm gold for night */
-  --brand: #E8B968;
-  --brand-hover: #F2C97D;
-  --brand-soft: rgba(232, 185, 104, 0.12);
-  --brand-softer: rgba(232, 185, 104, 0.06);
-  --brand-ring: rgba(232, 185, 104, 0.30);
-  --brand-ink: #15151A;
+  /* Brand flips to bright cyan — navy disappears on dark */
+  --brand: #1FBEE9;
+  --brand-hover: #4DCEEC;
+  --brand-soft: rgba(31, 190, 233, 0.14);
+  --brand-softer: rgba(31, 190, 233, 0.06);
+  --brand-ring: rgba(31, 190, 233, 0.32);
+  --brand-ink: #0A0E1A;
 
-  --accent-2: #FF7B5A;       /* coral */
-  --accent-2-soft: rgba(255, 123, 90, 0.16);
+  --accent-2: #6E80D9;       /* lifted navy that reads on dark surfaces */
+  --accent-2-soft: rgba(110, 128, 217, 0.18);
+  --accent-2-hover: #8A99E3;
 
-  --line: rgba(236, 231, 220, 0.16);
-  --line-strong: rgba(236, 231, 220, 0.26);
-  --line-faint: rgba(236, 231, 220, 0.08);
+  --line: rgba(220, 227, 245, 0.14);
+  --line-strong: rgba(220, 227, 245, 0.24);
+  --line-faint: rgba(220, 227, 245, 0.07);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.40);
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.40), 0 1px 2px rgba(0, 0, 0, 0.30);
   --shadow-md: 0 10px 28px -8px rgba(0, 0, 0, 0.55), 0 4px 8px rgba(0, 0, 0, 0.30);
   --shadow-lg: 0 30px 80px -20px rgba(0, 0, 0, 0.70), 0 8px 22px -8px rgba(0, 0, 0, 0.45);
-  --shadow-glow: 0 8px 40px -8px rgba(232, 185, 104, 0.45);
+  --shadow-glow: 0 8px 40px -8px rgba(31, 190, 233, 0.50);
 
-  --hover: rgba(236, 231, 220, 0.05);
-  --active: rgba(236, 231, 220, 0.09);
-  --selection: rgba(232, 185, 104, 0.22);
+  --hover: rgba(220, 227, 245, 0.06);
+  --active: rgba(220, 227, 245, 0.10);
+  --selection: rgba(31, 190, 233, 0.28);
 
-  --tooltip: #ECE7DC;
-  --tooltip-ink: #15151A;
-  --viz-bg: #07080C;
-  --viz-grid: rgba(236, 231, 220, 0.05);
+  --tooltip: #E8ECF5;
+  --tooltip-ink: #0A0E1A;
+  --viz-bg: #060912;
+  --viz-grid: rgba(220, 227, 245, 0.06);
 
   color-scheme: dark;
 }

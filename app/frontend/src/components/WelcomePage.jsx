@@ -80,7 +80,20 @@ export default function WelcomePage({ onEnter, onCercador, theme, onToggleTheme,
       </main>
 
       <footer className="welcome-foot">
-        Dades: Viasona · Embeddings: sentence-transformers
+        <span className="welcome-foot-line">
+          <span>Dades de</span>
+          <a
+            className="viasona-credit"
+            href="https://www.viasona.cat"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="viasona.cat"
+          >
+            <img src="/viasona-logo.png" alt="Viasona" />
+          </a>
+          <span aria-hidden="true">·</span>
+          <span>Embeddings: sentence-transformers</span>
+        </span>
       </footer>
     </div>
   )
