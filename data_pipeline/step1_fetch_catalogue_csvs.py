@@ -75,10 +75,30 @@ def _build_image_url(directori, fitxer) -> str:
     return f"{VIASONA_BASE_URL}/{str(directori).strip().strip('/')}/{str(fitxer).strip().strip('/')}"
 
 
-def _build_song_link(id_lletra, uri) -> str:
-    if not id_lletra or not uri:
+def _build_song_link(uri_grup, uri_album, uri_canco) -> str:
+    """Build the public Viasona song URL.
+
+    Viasona routes songs under the artist (not under ``/lletra/{id}/``):
+      * with album:    ``/grup/{artist-uri}/{album-uri}/{song-uri}``
+      * without album: ``/grup/{artist-uri}/{song-uri}``
+    Any artist slug linked to the song works (collabs accept any of them).
+    """
+    artist = str(uri_grup or "").strip().strip("/")
+    song   = str(uri_canco or "").strip().strip("/")
+    album  = str(uri_album or "").strip().strip("/")
+    if not artist or not song:
         return ""
-    return f"{VIASONA_BASE_URL}/lletra/{id_lletra}/{uri}"
+    if album:
+        return f"{VIASONA_BASE_URL}/grup/{artist}/{album}/{song}"
+    return f"{VIASONA_BASE_URL}/grup/{artist}/{song}"
+
+
+def _build_group_link(uri) -> str:
+    """Build the public Viasona artist URL: ``/grup/{artist-uri}`` (no id)."""
+    u = str(uri or "").strip().strip("/")
+    if not u:
+        return ""
+    return f"{VIASONA_BASE_URL}/grup/{u}"
 
 
 def _join_unique(values) -> str:
@@ -171,7 +191,9 @@ _SONGS_SQL = """
     SELECT gl.id_lletra, gl.titol AS titol_canco, gl.uri AS uri_canco,
         gl.contingut AS lletra, gl.autor, gl.compositor, gl.temps, gl.data,
         COALESCE(g_rel.titol,  g_directe.titol)   AS nom_grup,
-        COALESCE(gd_rel.titol, gd_directe.titol)  AS titol_album
+        COALESCE(g_rel.uri,    g_directe.uri)     AS uri_grup,
+        COALESCE(gd_rel.titol, gd_directe.titol)  AS titol_album,
+        COALESCE(gd_rel.uri,   gd_directe.uri)    AS uri_album
     FROM grups_lletres gl
     LEFT JOIN grups_lletres_rel glr ON gl.id_lletra = glr.id_lletra
     LEFT JOIN grups g_rel         ON glr.id_grup = g_rel.id_grup
@@ -239,7 +261,7 @@ def _groups_rows(cursor) -> list[dict]:
             "num_albums":        r["num_albums"],
             "num_cancons":       r["num_cancons"],
             "grups_relacionats": _clean_html(r["grups_relacionats"]),
-            "viasona_link":      f"{VIASONA_BASE_URL}/grup/{r['id_grup']}/{r['uri']}",
+            "viasona_link":      _build_group_link(r["uri"]),
         })
     return out
 
@@ -254,6 +276,8 @@ def _songs_rows(cursor) -> list[dict]:
     for col in ("nom_grup", "titol_canco", "titol_album", "lletra", "autor", "compositor"):
         df[col] = df[col].apply(_clean_html)
     df["uri_canco"] = df["uri_canco"].fillna("").astype(str)
+    df["uri_grup"]  = df["uri_grup"].fillna("").astype(str)
+    df["uri_album"] = df["uri_album"].fillna("").astype(str)
     df = df[df["lletra"].str.strip() != ""]
 
     grouped = (df.groupby(["nom_grup", "lletra", "titol_canco"], dropna=False, as_index=False)
@@ -261,6 +285,8 @@ def _songs_rows(cursor) -> list[dict]:
                      "titol_album": _join_unique,
                      "id_lletra":   "min",
                      "uri_canco":   _first_non_empty,
+                     "uri_grup":    _first_non_empty,
+                     "uri_album":   _first_non_empty,
                      "autor":       _join_unique,
                      "compositor":  _join_unique,
                      "temps":       _first_non_empty,
@@ -290,7 +316,7 @@ def _songs_rows(cursor) -> list[dict]:
             "compositor":   row["compositor"] if pd.notna(row["compositor"]) else "",
             "durada":       str(row["temps"]) if pd.notna(row["temps"]) else "",
             "data":         str(row["data"])  if pd.notna(row["data"])  else "",
-            "viasona_link": _build_song_link(id_lletra, row["uri_canco"]),
+            "viasona_link": _build_song_link(row["uri_grup"], row["uri_album"], row["uri_canco"]),
         })
     return out
 
