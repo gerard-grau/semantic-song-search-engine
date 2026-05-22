@@ -99,6 +99,15 @@ async def lifespan(app: FastAPI):
     await loop.run_in_executor(None, _safe_call, load_encoder, "embedding model")
     await loop.run_in_executor(None, _safe_call, _warm_encoder, "encoder warm-up")
 
+    # 3b. Filter pipeline — runs one full /api/filter pass so the visible
+    #     matmul, the genre-centroid argpartition, the salience computation
+    #     AND the Pydantic schema validators are all JIT-warm before the
+    #     first user query hits. The encoder warmup alone doesn't cover
+    #     these: a single-token "warmup" doesn't allocate the same BLAS
+    #     buffers that a real (N*F, D) matmul does, and Pydantic v2
+    #     compiles its validator on first model construction.
+    await loop.run_in_executor(None, _safe_call, _warm_filter, "filter pipeline")
+
     # 4. Cercador index — not on the /filter path; let it finish in bg.
     loop.run_in_executor(None, _safe_call, prewarm_cercador, "cercador index")
 
@@ -107,9 +116,35 @@ async def lifespan(app: FastAPI):
 
 def _warm_encoder() -> None:
     """Run one dummy encode so the model's first forward pass is paid
-    before any user query hits the API. Idempotent."""
+    before any user query hits the API. Uses a Catalan phrase of roughly
+    typical query length so the attention kernels for that sequence
+    length are warmed (a 1-token "warmup" string would leave the longer
+    kernel paths cold)."""
     from app.backend.core.encoder import encode_query
-    encode_query("warmup")
+    encode_query("una cançó d'amor sobre el mar i la nostàlgia")
+
+
+def _warm_filter() -> None:
+    """Drive both /filter modes once so every numpy + Pydantic path the
+    real route touches is hot before the first user request. Catches:
+    visible-matrix matmul, mean centering, genre-centroid argpartition,
+    discriminability / salience math, response building, FilterRequest /
+    FilterResponse / ScoreItem validators."""
+    from app.backend.api.routes.search import filter_songs
+    from app.backend.api.schemas import FilterRequest
+    from app.backend.core.data_loader import get_visible_index
+
+    index = get_visible_index()
+    if not index or index.get("matrix") is None or index["matrix"].size == 0:
+        return
+
+    # Text-query path.
+    filter_songs(FilterRequest(query="amor", song_ids=None))
+
+    # Similar-to-song path (used by the "similars a X" chip).
+    songs = index.get("songs") or []
+    if songs:
+        filter_songs(FilterRequest(similar_to_id=int(songs[0]["id"])))
 
 
 def _safe_call(fn, label: str) -> None:

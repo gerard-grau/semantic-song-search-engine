@@ -79,10 +79,15 @@ GENRE_WEIGHT = 0.15
 # QUERY_DISCRIM_REF — required (top − median) raw-cosine gap for full
 # discriminability. 0.15 ≈ "the best beats the typical song by 15 cosine
 # points". Below that we proportionally dim everything.
-# QUERY_DISCRIM_FLOOR — lower bound so a non-discriminating query still
-# leaves the top barely visible instead of going fully grey.
+# QUERY_DISCRIM_FLOOR — lower bound applied to every query so that an
+# uninformative query (e.g. "música") still gives its relative top a
+# decent visible salience instead of collapsing the whole catalog to
+# grey. The bottom always sits at salience 0 — only the *spread* is
+# affected — so a specific query like "txarango" still pushes most
+# songs into the faded tail while the FLOOR only widens what we show
+# when the query is broad.
 QUERY_DISCRIM_REF   = 0.15
-QUERY_DISCRIM_FLOOR = 0.05
+QUERY_DISCRIM_FLOOR = 0.5
 
 # SIMILAR_PERCENTILE — similar-to-song chip stays broad so stacking 3-4 chips
 # intersects to a meaningful "similar to all of these" set.

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import useTheme from './hooks/useTheme'
 import WelcomePage from './components/WelcomePage'
 import CercadorPage from './components/CercadorPage'
@@ -34,16 +34,14 @@ export default function App() {
 
   // null = no filter applied (everything is active).
   const [activeIds, setActiveIds] = useState(null)
-  // Combined score per surviving song: arithmetic mean of its per-chip
-  // scores. Stored separately so we don't recompute on every render.
-  // ``scoreMap`` holds the *salience* (drives opacity / colour, dimmed
-  // when the query is uninformative). ``rankMap`` holds the *relative
-  // position* (drives point size, undimmed) so weak queries still show
-  // which songs are relatively best at a glance.
-  const [scoreMap, setScoreMap] = useState({})
-  const [rankMap, setRankMap] = useState({})
-  // One score map per chip, in chip order. Lets the right panel break
-  // the combined score back down into "boig: 0.81, amore: 0.74, …".
+  // Combined per-song filter scores: `{ [id]: { sal, rank } }`.
+  //   sal  — drives opacity / colour (dimmed when the query is uninformative)
+  //   rank — drives point size (untouched by discriminability) so weak
+  //          queries still show which songs are relatively best.
+  // Empty object = no active chip filter; Scatter2D treats every point at
+  // full salience/size in that case.
+  const [filterMap, setFilterMap] = useState({})
+  // One salience map per chip (for the right-panel score breakdown popover).
   const [chipScoreMaps, setChipScoreMaps] = useState([])
 
   const [chips, setChips] = useState([])
@@ -58,16 +56,21 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false)
 
   const aliveIdsRef = useRef(null)
+  // Promise that resolves once /api/songs has loaded. Kicked off on mount
+  // so by the time the user clicks "Entrar al mapa" it has usually already
+  // resolved — but if they're fast, `handleEnter` awaits it instead of
+  // dropping them into an empty scatter.
+  const prefetchPromiseRef = useRef(null)
 
   // The most recent "similar" chip's song id becomes the visualization's
   // focal (diamond) so the anchor of the current similarity filter stays
   // visible while other filters compose.
-  const focalSimilarId = (() => {
+  const focalSimilarId = useMemo(() => {
     for (let i = chips.length - 1; i >= 0; i--) {
       if (chips[i].kind === 'similar') return chips[i].value
     }
     return null
-  })()
+  }, [chips])
 
   // Intersect chip-derived survivors with the genre legend selection.
   // Either dimension can be null/empty independently:
@@ -75,7 +78,7 @@ export default function App() {
   //   - only chips           → finalActiveIds = activeIds
   //   - only genres          → finalActiveIds = songs whose genre is selected
   //   - both                 → intersection of the two
-  const finalActiveIds = (() => {
+  const finalActiveIds = useMemo(() => {
     if (selectedGenres.length === 0) return activeIds
     const wanted = new Set(selectedGenres)
     if (activeIds == null) {
@@ -86,34 +89,21 @@ export default function App() {
       if (activeIds.has(s.id) && wanted.has(s.genre)) out.add(s.id)
     }
     return out
-  })()
+  }, [activeIds, selectedGenres, allSongs])
 
-  const displaySongs = finalActiveIds
-    ? allSongs
-        .filter(s => finalActiveIds.has(s.id))
-        .map(s => ({ ...s, score: scoreMap[s.id] ?? 0 }))
-        .sort((a, b) => b.score - a.score)
-    : allSongs
+  const displaySongs = useMemo(() => {
+    if (!finalActiveIds) return allSongs
+    return allSongs
+      .filter(s => finalActiveIds.has(s.id))
+      .map(s => ({ ...s, score: filterMap[s.id]?.sal ?? 0 }))
+      .sort((a, b) => b.score - a.score)
+  }, [finalActiveIds, allSongs, filterMap])
 
-  // Salience map handed to the scatter. Only set when chips are present;
-  // genre legend alone uses pure in/out gating (no salience to interpolate).
-  const salienceMap = useMemo(() => {
-    if (chips.length === 0) return null
-    const m = new Map()
-    for (const id in scoreMap) m.set(Number(id), scoreMap[id])
-    return m
-  }, [scoreMap, chips.length])
-
-  // Rank map = relative position in [0, 1], untouched by discriminability.
-  // Drives the scatter's point size so weak queries still show a clear
-  // gradient (top of "animals" big, unrelated songs small) even when the
-  // overall colour is dim.
-  const rankSizeMap = useMemo(() => {
-    if (chips.length === 0) return null
-    const m = new Map()
-    for (const id in rankMap) m.set(Number(id), rankMap[id])
-    return m
-  }, [rankMap, chips.length])
+  // Scatter2D consumes `filterMap` directly (plain object, indexed by id).
+  // `null` means "no chip filter active" so every visible point renders
+  // at full salience / size — the genre legend, if any, gates via
+  // `activeIds` separately.
+  const filterScores = chips.length === 0 ? null : filterMap
 
   // Display count: "X cançons rellevants" — songs that read as actually
   // highlighted on the scatter (salience above STRONG_MATCH_THRESHOLD).
@@ -122,39 +112,53 @@ export default function App() {
   const STRONG_MATCH_THRESHOLD = 0.30
   const matchCount = useMemo(() => {
     if (!finalActiveIds) return allSongs.length
-    if (!salienceMap) return finalActiveIds.size
+    if (chips.length === 0) return finalActiveIds.size
     let c = 0
     for (const id of finalActiveIds) {
-      if ((salienceMap.get(id) ?? 0) >= STRONG_MATCH_THRESHOLD) c++
+      if ((filterMap[id]?.sal ?? 0) >= STRONG_MATCH_THRESHOLD) c++
     }
     return c
-  }, [finalActiveIds, salienceMap, allSongs])
+  }, [finalActiveIds, filterMap, chips.length, allSongs.length])
 
-  const loadAll = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      const data = await fetchAllSongs()
-      setAllSongs(data.songs)
-      setBaseProj2d(data.projections_2d)
-      setActiveIds(null)
-      setScoreMap({})
-      setRankMap({})
-      setChipScoreMaps([])
-      setChips([])
-      setSelectedGenres([])
-      setMessage(null)
-      aliveIdsRef.current = null
-    } catch (err) {
-      setError("No s'ha pogut connectar amb el servidor.")
-      console.error(err)
-    } finally {
-      setIsLoading(false)
-    }
+  // Prefetch the catalog as soon as the app mounts. The welcome page stays
+  // fully interactive — we don't toggle `isLoading` here — so the user can
+  // pick the cercador or read the page while /api/songs streams in.
+  useEffect(() => {
+    if (prefetchPromiseRef.current) return
+    prefetchPromiseRef.current = fetchAllSongs()
+      .then(data => {
+        setAllSongs(data.songs)
+        setBaseProj2d(data.projections_2d)
+      })
+      .catch(err => {
+        prefetchPromiseRef.current = null  // allow a retry on next click
+        setError("No s'ha pogut connectar amb el servidor.")
+        console.error(err)
+      })
   }, [])
 
+  function resetFilters() {
+    setActiveIds(null)
+    setFilterMap({})
+    setChipScoreMaps([])
+    setChips([])
+    setSelectedGenres([])
+    setMessage(null)
+    aliveIdsRef.current = null
+  }
+
   async function handleEnter() {
-    await loadAll()
+    resetFilters()
+    // If the user clicks before the background prefetch resolves, show the
+    // loading state and await it; otherwise navigate instantly.
+    if (allSongs.length === 0) {
+      setIsLoading(true)
+      try {
+        await prefetchPromiseRef.current
+      } finally {
+        setIsLoading(false)
+      }
+    }
     setPage('main')
   }
 
@@ -168,28 +172,29 @@ export default function App() {
   }
 
   // Re-run an ordered list of chips from scratch (used on add and remove).
-  // Returns the final alive set + per-chip score and rank maps so the
-  // right panel can display a combined score and the scatter can size
-  // points by rank independently from how it colours them by salience.
+  // Returns the final alive set + per-chip salience maps + per-chip rank
+  // maps. The per-chip salience maps feed the right-panel breakdown
+  // popover; per-chip ranks are only used here to compute the combined
+  // size driver and never enter React state.
   async function applyChipsFromScratch(orderedChips) {
     let alive = null
-    const perChipMaps = []
-    const perChipRankMaps = []
+    const perChipSal = []
+    const perChipRank = []
     let lastMessage = null
     for (const chip of orderedChips) {
       const data = await applyChip(chip, alive)
-      const map = {}
-      const rmap = {}
+      const salMap = {}
+      const rankMap = {}
       data.songs.forEach(s => {
-        map[s.id]  = s.score ?? 0
-        rmap[s.id] = s.rank ?? s.score ?? 0
+        salMap[s.id]  = s.score ?? 0
+        rankMap[s.id] = s.rank ?? s.score ?? 0
       })
-      perChipMaps.push(map)
-      perChipRankMaps.push(rmap)
+      perChipSal.push(salMap)
+      perChipRank.push(rankMap)
       alive = data.songs.map(s => s.id)
       lastMessage = data.message ?? null
     }
-    return { alive, perChipMaps, perChipRankMaps, lastMessage }
+    return { alive, perChipSal, perChipRank, lastMessage }
   }
 
   async function handleAddChip(text) {
@@ -225,13 +230,7 @@ export default function App() {
   async function handleRemoveChip(index) {
     const newChips = chips.filter((_, i) => i !== index)
     if (newChips.length === 0) {
-      setChips([])
-      setActiveIds(null)
-      setScoreMap({})
-      setRankMap({})
-      setChipScoreMaps([])
-      aliveIdsRef.current = null
-      setMessage(null)
+      resetFilters()
       return
     }
     await runChipUpdate(newChips)
@@ -241,25 +240,24 @@ export default function App() {
     setIsLoading(true)
     setError(null)
     try {
-      const { alive, perChipMaps, perChipRankMaps, lastMessage } = await applyChipsFromScratch(newChips)
+      const { alive, perChipSal, perChipRank, lastMessage } = await applyChipsFromScratch(newChips)
       aliveIdsRef.current = alive
       setActiveIds(new Set(alive))
-      // Combined score = arithmetic mean of per-chip scores; same for rank.
+      // Combined { sal, rank } per surviving song — arithmetic mean
+      // across chips, so each chip contributes equally to the final
+      // visual ranking.
+      const n = newChips.length || 1
       const combined = {}
-      const combinedRank = {}
       for (const id of alive) {
-        if (newChips.length === 0) { combined[id] = 1; combinedRank[id] = 1; continue }
-        let sum = 0, rsum = 0
+        let sumSal = 0, sumRank = 0
         for (let i = 0; i < newChips.length; i++) {
-          sum  += (perChipMaps[i][id]     ?? 0)
-          rsum += (perChipRankMaps[i][id] ?? 0)
+          sumSal  += perChipSal[i][id]  ?? 0
+          sumRank += perChipRank[i][id] ?? 0
         }
-        combined[id]     = sum  / newChips.length
-        combinedRank[id] = rsum / newChips.length
+        combined[id] = { sal: sumSal / n, rank: sumRank / n }
       }
-      setScoreMap(combined)
-      setRankMap(combinedRank)
-      setChipScoreMaps(perChipMaps)
+      setFilterMap(combined)
+      setChipScoreMaps(perChipSal)
       setChips(newChips)
       setMessage(lastMessage)
     } catch (err) {
@@ -268,17 +266,6 @@ export default function App() {
     } finally {
       setIsLoading(false)
     }
-  }
-
-  function handleReset() {
-    setActiveIds(null)
-    setScoreMap({})
-    setRankMap({})
-    setChipScoreMaps([])
-    setChips([])
-    setSelectedGenres([])
-    setMessage(null)
-    aliveIdsRef.current = null
   }
 
   function handleOpenDetail(songId) {
@@ -367,7 +354,7 @@ export default function App() {
               chips={chips}
               onAddChip={handleAddChip}
               onRemoveChip={handleRemoveChip}
-              onReset={handleReset}
+              onReset={resetFilters}
               isLoading={isLoading}
             />
           </div>
@@ -375,7 +362,7 @@ export default function App() {
           <div className="viz-bar viz-bar--controls">
             <span className="viz-count">
               {isFiltered ? (
-                <><strong>{matchCount}</strong> {salienceMap ? 'rellevants' : 'cançons'} / {allSongs.length}</>
+                <><strong>{matchCount}</strong> {chips.length > 0 ? 'rellevants' : 'cançons'} / {allSongs.length}</>
               ) : (
                 <><strong>{allSongs.length}</strong> cançons al mapa</>
               )}
@@ -386,8 +373,7 @@ export default function App() {
             <Scatter2D
               points={baseProj2d}
               activeIds={finalActiveIds}
-              salienceMap={salienceMap}
-              rankMap={rankSizeMap}
+              filterScores={filterScores}
               focalId={focalSimilarId}
               highlightedId={highlightedId}
               onPointHover={setHighlightedId}

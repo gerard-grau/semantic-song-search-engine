@@ -5,27 +5,47 @@ import { genreColor, GENRE_COLORS } from './genreColors'
  * 2D Scatter — chip-driven salience visualization.
  *
  * Every point is rendered with visual properties (size, opacity, colour
- * blend) driven continuously by its salience score in [0, 1]:
+ * blend, halo, outline) driven continuously by its salience score sv ∈ [0, 1]:
  *
- *   salience ≈ 0  →  small grey "ghost" (poor match)
- *   salience ≈ 1  →  big saturated genre dot with halo (strong match)
+ *   sv ≈ 0    →  small faded grey, no halo, no outline (clearly filtered out)
+ *   sv ≈ 0.5  →  near-normal size, mostly colour, faint halo + outline
+ *   sv ≈ 1    →  big saturated dot, full halo + outline (strong match)
  *
- * The frontend doesn't filter anything — low-salience points just recede
- * visually. Without an active filter (no chips, no genre legend) every
- * point gets salience 1.0 so the scatter shows the full coloured catalog.
+ * Two design choices to keep in mind:
  *
- * The genre legend still hard-filters via `activeIds`: a song that is
- * excluded by the legend gets salience 0 regardless of its chip score.
+ * 1. The salience / rank gammas are linear (= 1.0) so the visual reads
+ *    the score directly. Sharper curves (gamma > 1) bury vague matches;
+ *    gentler curves (gamma < 1) make non-related songs look "in" for
+ *    specific queries like "txarango". Linear is the honest middle.
+ *
+ * 2. HALO_ONSET and OUTLINE_ONSET are both tiny (0.05) so the halo and
+ *    outline scale *continuously* from sv ≈ 0 to 1 — no threshold to
+ *    cross, no "this dot has a black border, that one doesn't" jitter.
+ *
+ * Genre legend still hard-filters via `activeIds`: a song excluded by
+ * the legend is forced to sv = rv = 0 regardless of its chip score.
  */
-const SALIENCE_GAMMA = 1.4   // colour contrast curve (higher = punchier)
-const RANK_GAMMA     = 1.3   // size contrast curve
-const GHOST_SIZE     = 0.7   // size multiplier at rank 0 / unfiltered point
+const SALIENCE_GAMMA = 1.0   // colour contrast curve. Linear keeps the
+                             // mapping honest: sv reads the score
+                             // directly so a bottom-tail song never
+                             // gets lifted into the "highlighted" range.
+const RANK_GAMMA     = 1.0   // same for size.
+const GHOST_SIZE     = 0.7   // size multiplier at rank 0 (worst under
+                             // filter / legend-excluded). Clearly
+                             // smaller than NORMAL so the bottom of the
+                             // distribution reads as faded.
 const NORMAL_SIZE    = 1.15  // size multiplier with no filter active
-const FILTER_TOP     = 1.75  // size multiplier at rank 1 *under* a filter,
-                             // intentionally bigger than NORMAL_SIZE so top
-                             // matches read as standing out from the cloud
-const HALO_ONSET     = 0.35  // salience above which a halo starts to grow
-const OUTLINE_ONSET  = 0.50  // salience above which a dark outline appears
+const FILTER_TOP     = 1.65  // size multiplier at rank 1 under a filter.
+                             // Big enough that a clear top match
+                             // dominates the scatter visually.
+const HALO_ONSET     = 0.05  // salience above which a halo starts. Kept
+                             // tiny so the halo scales continuously
+                             // (alpha = 0.20 × (sv − onset) / (1 − onset))
+                             // instead of switching on at a threshold.
+const OUTLINE_ONSET  = 0.05  // same idea for the dark outline — without
+                             // this, songs whose sv sits just below
+                             // 0.5 would lose the outline while songs
+                             // just above kept it, looking jittery.
 
 function lerp(a, b, t) { return a + (b - a) * t }
 
@@ -48,7 +68,7 @@ function lerpColor(a, b, t) {
 }
 
 export default function Scatter2D({
-  points, activeIds, salienceMap, rankMap, focalId,
+  points, activeIds, filterScores, focalId,
   highlightedId, onPointHover, onPointOpenDetail,
   // Legend doubles as the genre filter: clicking an item toggles a genre
   // chip in the parent's chip list. ``activeGenres`` is the list of slugs
@@ -62,25 +82,46 @@ export default function Scatter2D({
   const containerRef = useRef(null)
   const viewRef = useRef({ panX: 0, panY: 0, zoom: 1 })
   const baseTransformRef = useRef({ scale: 1, offsetX: 0, offsetY: 0 })
+  // Cache key for `baseTransformRef` so getBaseTransform only re-scans the
+  // ~5000 points when the catalog or canvas size actually changes — not on
+  // every redraw triggered by hover, pan, or zoom.
+  const baseTransformKeyRef = useRef({ pts: null, w: 0, h: 0 })
   const dragRef = useRef({ dragging: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0, moved: false })
   const initedRef = useRef(false)
   const drawRef = useRef(null)
 
   const getBaseTransform = useCallback((w, h, pts) => {
-    if (!pts.length) return { scale: 1, offsetX: 0, offsetY: 0 }
+    const key = baseTransformKeyRef.current
+    if (key.pts === pts && key.w === w && key.h === h) {
+      return baseTransformRef.current
+    }
     const pad = 60
-    const xs = pts.map(p => p.x)
-    const ys = pts.map(p => p.y)
-    const minX = Math.min(...xs), maxX = Math.max(...xs)
-    const minY = Math.min(...ys), maxY = Math.max(...ys)
-    const rangeX = maxX - minX || 1
-    const rangeY = maxY - minY || 1
-    const usableW = w - pad * 2
-    const usableH = h - pad * 2
-    const scale = Math.min(usableW / rangeX, usableH / rangeY)
-    const offsetX = pad + (usableW - rangeX * scale) / 2 - minX * scale
-    const offsetY = pad + (usableH - rangeY * scale) / 2 - minY * scale
-    return { scale, offsetX, offsetY }
+    let value
+    if (!pts.length) {
+      value = { scale: 1, offsetX: 0, offsetY: 0 }
+    } else {
+      // Plain min/max loop rather than Math.min(...xs) — the spread creates
+      // a temporary array of 5000 args, which is both slower and at risk
+      // of hitting engine arg-count limits.
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+      for (const p of pts) {
+        if (p.x < minX) minX = p.x
+        if (p.x > maxX) maxX = p.x
+        if (p.y < minY) minY = p.y
+        if (p.y > maxY) maxY = p.y
+      }
+      const rangeX = maxX - minX || 1
+      const rangeY = maxY - minY || 1
+      const usableW = w - pad * 2
+      const usableH = h - pad * 2
+      const scale = Math.min(usableW / rangeX, usableH / rangeY)
+      const offsetX = pad + (usableW - rangeX * scale) / 2 - minX * scale
+      const offsetY = pad + (usableH - rangeY * scale) / 2 - minY * scale
+      value = { scale, offsetX, offsetY }
+    }
+    baseTransformRef.current = value
+    baseTransformKeyRef.current = { pts, w, h }
+    return value
   }, [])
 
   function toWorld(p, bt) {
@@ -109,7 +150,6 @@ export default function Scatter2D({
     ctx.clearRect(0, 0, rect.width, rect.height)
 
     const bt = getBaseTransform(rect.width, rect.height, points)
-    baseTransformRef.current = bt
 
     if (!initedRef.current) {
       viewRef.current = { panX: 0, panY: 0, zoom: 1 }
@@ -122,42 +162,40 @@ export default function Scatter2D({
     const cs = getComputedStyle(document.documentElement)
     const labelInk = cs.getPropertyValue('--ink').trim() || '#15151A'
     const labelMute = cs.getPropertyValue('--ink-soft').trim() || '#5D6D7E'
-    // Ghost colour: what a salience-0 point looks like — the same muted
-    // grey the scatter has always used for filtered-out points. Dark mode
-    // needs a lighter base colour + higher alpha because --ink-mute on
-    // near-black is essentially invisible.
+    // Ghost colour + alpha: how a salience-0 point looks. Low enough
+    // that the bottom of the distribution clearly reads as "filtered
+    // out" — for a specific query (e.g. "txarango") most songs end up
+    // here and we want them out of the way visually. Dark mode needs a
+    // lighter base colour and a slightly higher alpha because --ink-mute
+    // on near-black is barely visible.
     const isDark = document.documentElement.dataset.theme === 'dark'
     const dimColor = isDark
       ? (cs.getPropertyValue('--ink-soft').trim() || '#B5AFA0')
       : (cs.getPropertyValue('--ink-mute').trim() || '#6B6B75')
-    const dimAlpha = isDark ? 0.38 : 0.22
+    const dimAlpha = isDark ? 0.4 : 0.3
 
     // Resolve effective salience + rank for a song. Three filter
     // dimensions stack:
     //   1. No filter at all → everyone gets 1.0 (current "all colourful")
     //   2. Legend filter only → in/out is boolean (1.0 or 0.0)
-    //   3. Chips active → salience and rank come from their maps; legend
-    //      still gates as a 0/1 multiplier on both.
+    //   3. Chips active → salience and rank come from `filterScores`;
+    //      the legend still gates via `activeIds` as a 0/1 multiplier.
     //
-    // Returns {sal, rank}. `sal` drives colour/opacity (dimmed when the
-    // query is uninformative); `rank` drives size (always full range)
-    // so weak queries still show their relative ordering at a glance.
+    // `sal` drives colour/opacity (dimmed when the query is uninformative);
+    // `rank` drives size (always full range) so weak queries still show
+    // their relative ordering at a glance.
     function getScores(p) {
       if (!hasFilter) return { sal: 1.0, rank: 1.0 }
       if (!activeIds.has(p.id)) return { sal: 0.0, rank: 0.0 }
-      const s = salienceMap?.get(p.id)
-      const r = rankMap?.get(p.id)
-      // Legend-only filter (no chips) ⇒ both default to 1: full colour, full size.
-      return {
-        sal:  s == null ? 1.0 : s,
-        rank: r == null ? (s == null ? 1.0 : s) : r,
-      }
+      // Legend-only filter ⇒ no filterScores ⇒ full colour + size.
+      const s = filterScores && filterScores[p.id]
+      return s ? s : { sal: 1.0, rank: 1.0 }
     }
 
     // Bigger top size only under a *similarity* filter (chips). The genre
     // legend is a boolean categorical filter — its surviving points should
     // still read at the normal scale, not balloon up to 1.75 NODE_R.
-    const topSize = salienceMap ? FILTER_TOP : NORMAL_SIZE
+    const topSize = filterScores ? FILTER_TOP : NORMAL_SIZE
 
     function drawPoint(p, sal, rank) {
       const sv = Math.pow(Math.max(0, Math.min(1, sal)),  SALIENCE_GAMMA)
@@ -178,10 +216,11 @@ export default function Scatter2D({
         ctx.fill()
       }
 
-      // Core: blend grey ↔ genre colour driven by salience. The ×1.6
-      // multiplier lets saturation catch up faster than opacity so
-      // mid-salience points still read as "in the cluster".
-      const colour = lerpColor(dimColor, genre, Math.min(1, sv * 1.6))
+      // Core: blend grey ↔ genre colour driven by salience. The ×1.8
+      // multiplier saturates colour just before sv crosses the upper
+      // half so a clearly highlighted song is fully coloured, while a
+      // low-sv song stays mostly grey-tinted (the "filtered out" cue).
+      const colour = lerpColor(dimColor, genre, Math.min(1, sv * 1.8))
       ctx.beginPath()
       ctx.arc(px, py, coreR, 0, Math.PI * 2)
       ctx.fillStyle = colour
@@ -296,7 +335,7 @@ export default function Scatter2D({
       const hp = points.find(p => p.id === highlightedId)
       if (hp) drawHoveredNode(hp)
     }
-  }, [points, activeIds, salienceMap, rankMap, focalId, highlightedId, getBaseTransform])
+  }, [points, activeIds, filterScores, focalId, highlightedId, getBaseTransform])
 
   useEffect(() => { drawRef.current = draw }, [draw])
 

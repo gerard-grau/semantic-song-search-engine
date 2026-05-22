@@ -188,10 +188,13 @@ def filter_embeddings_fast(
 
     order = np.argsort(-salience[subset_indices], kind="stable")
     ordered = subset_indices[order]
-    return [
-        (int(i), float(round(salience[i], 4)), float(round(norm_scores[i], 4)))
-        for i in ordered
-    ]
+    # Bulk numpy → Python conversion. Faster than the per-element
+    # int()/float()/round() loop because .tolist() converts the whole
+    # array in C, and the cost matters when this is called on ~5000 rows.
+    ids  = ordered.tolist()
+    sals = np.round(salience[ordered],    4).tolist()
+    rnks = np.round(norm_scores[ordered], 4).tolist()
+    return list(zip(ids, sals, rnks))
 
 
 def filter_by_similarity_fast(
