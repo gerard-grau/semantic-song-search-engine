@@ -287,8 +287,17 @@ def filter_by_similarity_fast(
         bonus = np.where(genre_valid, bonus, 0.0)
         raw = raw + GENRE_WEIGHT * bonus
 
-    # Pin focal at the top so it always sits in the global survivor set.
-    raw[focal_idx_full] = float(raw.max()) + GENRE_WEIGHT + 1.0
+    # Focal's natural raw is already near the max (self-cosine = 1.0 on
+    # every field, plus full genre bonus), so we DON'T inflate it further.
+    # The old pin pushed raw[focal] to ~2.3 — well above the real top of
+    # ~1.15 — which compressed every non-focal score into the lower half
+    # of the [0, 1] normalised range. The route layer now drops the focal
+    # from the response (see ``filter_songs`` in api/routes/search.py),
+    # so without this fix the best-similar-song the user sees would
+    # render as mid-grey instead of a bright match. ``keep_global[focal]
+    # = True`` below remains as belt-and-suspenders to guarantee the
+    # focal survives if any genre bonus accidentally tips another song
+    # to a higher raw value.
 
     r_min, r_max = float(raw.min()), float(raw.max())
     spread = r_max - r_min

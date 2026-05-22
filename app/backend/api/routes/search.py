@@ -81,8 +81,18 @@ def filter_songs(body: FilterRequest):
         )
         # Song-to-song similarity has no discriminability concept — every
         # survivor passed the percentile, so salience = rank = score.
+        #
+        # Drop the focal itself from the response: "similar to X" should
+        # surface songs OTHER than X. The scorer keeps X pinned at the top
+        # of the survivor set for stable chip composition (see its
+        # docstring); we strip it here at the response layer so the alive
+        # set passed to the next chip — and the visible list — never
+        # contains the song the user asked similars OF.
+        focal_idx = index["id_to_idx"].get(int(body.similar_to_id))
         items = [
-            ScoreItem(id=songs[idx]["id"], score=s, rank=s) for idx, s in scored
+            ScoreItem(id=songs[idx]["id"], score=s, rank=s)
+            for idx, s in scored
+            if idx != focal_idx
         ]
     else:
         scored = filter_embeddings_fast(

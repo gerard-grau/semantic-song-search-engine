@@ -243,18 +243,54 @@ export default function App() {
       const { alive, perChipSal, perChipRank, lastMessage } = await applyChipsFromScratch(newChips)
       aliveIdsRef.current = alive
       setActiveIds(new Set(alive))
-      // Combined { sal, rank } per surviving song — arithmetic mean
-      // across chips, so each chip contributes equally to the final
-      // visual ranking.
+      // Combined { sal, rank } per surviving song.
+      //
+      // rank — arithmetic mean across chips. Size keeps a smooth
+      //   ordering across chips so the user can still read the relative
+      //   ranking from point size even when colour collapses to grey.
+      //
+      // sal — drives colour. Two stages:
+      //   1. Geometric mean across chips — punishes songs that score
+      //      weakly on ANY chip (a low value drags the product down).
+      //   2. At n≥2 only, max-normalise (top survivor → 1.0) and raise
+      //      to a falloff power that grows with n. Without this, a
+      //      uniform gamma dimmed even the top winner, leaving every
+      //      multi-chip result reading as mid-grey. Now the relative
+      //      winner stays fully saturated and runners-up fall off
+      //      steeply: at n=2 a song at 80% of top's geom score lands
+      //      at ≈0.51, at n=3 at ≈0.33, at n=4 at ≈0.21 — only the
+      //      closest matches survive visually as the chips stack.
+      //
+      // At n=1, salience passes through unchanged (geom of one value =
+      // identity, no max-norm) so the backend's discriminability-scaled
+      // single-chip colouring the user calibrated against is preserved.
       const n = newChips.length || 1
+      const falloffPower = 1 + 2 * (n - 1)   // 1 / 3 / 5 / 7 / …
+
+      const geomMap = {}
+      const rankMap = {}
+      let maxGeom = 0
+      for (const id of alive) {
+        let prodSal = 1
+        let sumRank = 0
+        for (let i = 0; i < newChips.length; i++) {
+          prodSal *= (perChipSal[i][id]  ?? 0)
+          sumRank += (perChipRank[i][id] ?? 0)
+        }
+        const g = Math.pow(prodSal, 1 / n)
+        geomMap[id] = g
+        rankMap[id] = sumRank / n
+        if (g > maxGeom) maxGeom = g
+      }
+
+      const useMaxNorm = n >= 2 && maxGeom > 1e-6
       const combined = {}
       for (const id of alive) {
-        let sumSal = 0, sumRank = 0
-        for (let i = 0; i < newChips.length; i++) {
-          sumSal  += perChipSal[i][id]  ?? 0
-          sumRank += perChipRank[i][id] ?? 0
-        }
-        combined[id] = { sal: sumSal / n, rank: sumRank / n }
+        const g = geomMap[id]
+        const sal = useMaxNorm
+          ? Math.pow(g / maxGeom, falloffPower)
+          : g
+        combined[id] = { sal, rank: rankMap[id] }
       }
       setFilterMap(combined)
       setChipScoreMaps(perChipSal)
