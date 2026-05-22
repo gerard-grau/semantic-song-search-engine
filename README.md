@@ -14,11 +14,11 @@ Tens **dues coses**: aquest repo (codi) i un paquet de dades a part (`dades.zip`
 
 1. Demana `dades.zip` a la persona que t'ha passat el repo.
 2. Tria la teva guia segons el sistema operatiu:
-   - [`README_LINUX.md`](README_LINUX.md) — Ubuntu / Debian natiu.
-   - [`README_WSL.md`](README_WSL.md) — Windows 10/11 amb WSL2 (recomanat per Windows).
+   - [`README_LINUX.md`](README_LINUX.md) — Linux natiu (Ubuntu/Debian) **i** Windows 10/11 amb WSL2 (recomanat per Windows).
    - [`README_WINDOWS.md`](README_WINDOWS.md) — Windows natiu amb PowerShell.
+   - [`README_LINUX_MAQUINA.md`](README_LINUX_MAQUINA.md) — variant Linux quan baixes les dades grans des de la màquina UPC (`aulagpus`) per SSH.
 
-Les tres guies són **seqüencials**: de `git clone` a obrir `http://localhost:5173` al navegador. Si saltes passos, no funciona.
+Les tres guies són **seqüencials**: de `git clone` a obrir `http://localhost:3000` al navegador. Si saltes passos, no funciona.
 
 ## Què hi ha a `dades.zip`
 

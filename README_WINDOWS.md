@@ -1,13 +1,13 @@
 # Setup — Windows natiu (sense WSL)
 
-Guia per a Windows 10/11 amb Python instal·lat al sistema. Tot el codi corre a PowerShell. Si t'és més còmode, mira [`README_WSL.md`](README_WSL.md) — és més robust per al parquet de 5 GB.
+Guia per a Windows 10/11 amb Python instal·lat al sistema. Tot el codi corre a PowerShell. Si t'és més còmode, mira [`README_LINUX.md`](README_LINUX.md) (secció WSL2) — és més robust per al parquet de 5 GB.
 
 ## 0. Prerequisits
 
 Instal·la les eines bàsiques (com a Administrador):
 
 1. **Git for Windows** — <https://git-scm.com/download/win>
-2. **Python 3.11** — <https://www.python.org/downloads/>  ✅ "Add Python to PATH"
+2. **Python 3.10+** — <https://www.python.org/downloads/>  ✅ "Add Python to PATH"
 3. **Node.js 20 LTS** — <https://nodejs.org/>
 4. **Docker Desktop** — <https://www.docker.com/products/docker-desktop/>
 5. **7-Zip** — <https://www.7-zip.org/> (`Expand-Archive` no gestiona bé arxius de >4 GB)
@@ -20,14 +20,14 @@ Obre **PowerShell** (no CMD) per a la resta dels passos.
 
 ```powershell
 cd $HOME
-git clone <URL_DEL_REPO> semantic-song-search-engine
+git clone https://github.com/gerardgrau/semantic-song-search-engine.git
 cd semantic-song-search-engine
 ```
 
 ## 2. Entorn Python
 
 ```powershell
-py -3.11 -m venv .venv
+py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
@@ -143,7 +143,7 @@ npm install
 npm run dev
 ```
 
-Obre <http://localhost:5173>.
+Obre <http://localhost:3000>.
 
 ## Problemes coneguts amb Windows natiu
 

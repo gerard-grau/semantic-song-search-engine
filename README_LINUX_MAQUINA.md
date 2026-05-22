@@ -23,7 +23,7 @@ La resta (parquets de `embedded_songs_dataset/`, snapshot de lyrics, dumps de DB
 
 ```bash
 sudo apt update
-sudo apt install -y git python3.11 python3.11-venv python3-pip build-essential curl unzip openssh-client
+sudo apt install -y git python3 python3-venv python3-pip build-essential curl unzip openssh-client
 ```
 
 Node.js 20+:
@@ -38,14 +38,14 @@ sudo apt install -y nodejs
 ## 1. Clonar el repo
 
 ```bash
-git clone <URL_DEL_REPO> semantic-song-search-engine
+git clone https://github.com/gerardgrau/semantic-song-search-engine.git
 cd semantic-song-search-engine
 ```
 
 ## 2. Entorn Python
 
 ```bash
-python3.11 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
@@ -169,7 +169,7 @@ curl -X PUT "http://localhost:6333/collections/songs_lyrics_chunks/snapshots/rec
 ## 9. Reindexar `songs_qualitative`
 
 ```bash
-cd ~/semantic-song-search-engine
+cd ~/.../semantic-song-search-engine
 source .venv/bin/activate
 CUDA_VISIBLE_DEVICES="" python -m ml.embeddings.index_qdrant_docker --only-qualitative
 ```
@@ -208,7 +208,7 @@ npm install
 npm run dev
 ```
 
-Obre <http://localhost:5173>.
+Obre <http://localhost:3000>.
 
 ---
 

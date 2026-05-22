@@ -7,7 +7,7 @@ SPA en **React 19 + Vite 8**. Tot el codi viu sota `app/frontend/src/`.
 ```bash
 cd app/frontend
 npm install
-npm run dev      # arrenca Vite a http://localhost:5173 amb proxy /api → backend
+npm run dev      # arrenca Vite a http://localhost:3000 amb proxy /api → backend
 npm run build    # bundle de producció a app/frontend/dist/
 npm run preview  # serveix el bundle estàtic
 ```
