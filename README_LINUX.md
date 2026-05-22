@@ -124,6 +124,8 @@ curl -X PUT "http://localhost:6333/collections/songs_lyrics_chunks/snapshots/rec
 
 ## 8. Reindexar `songs_qualitative`
 
+> Torna a l'arrel del repo si encara estàs a `~` del pas 6 (`cd ~/.../semantic-song-search-engine`).
+
 ```bash
 source .venv/bin/activate
 CUDA_VISIBLE_DEVICES="" python -m ml.embeddings.index_qdrant_docker --only-qualitative

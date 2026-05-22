@@ -104,7 +104,14 @@ def _load_meta_csv() -> pd.DataFrame:
     import re
     df = pd.read_csv(_CSV_PATH, encoding="latin-1", engine="python", on_bad_lines="skip")
     df.columns = [re.sub(r"^[^\w]+", "", c, flags=re.ASCII).lstrip("﻿") for c in df.columns]
-    return df[["id_lyrics", "artist", "title", "album", "lyrics"]].fillna("")
+    df = df[["id_lyrics", "artist", "title", "album", "lyrics"]].fillna("")
+    # ~10k rows have non-numeric id_lyrics (literal "None", or content from a
+    # sibling column that bled in past an unescaped quote). Coerce and drop
+    # them so the int64 parquet side merges cleanly.
+    df["id_lyrics"] = pd.to_numeric(df["id_lyrics"], errors="coerce")
+    df = df.dropna(subset=["id_lyrics"])
+    df["id_lyrics"] = df["id_lyrics"].astype("int64")
+    return df
 
 
 def _read_progress() -> int:
