@@ -2,15 +2,53 @@ import { useRef, useEffect, useCallback } from 'react'
 import { genreColor, GENRE_COLORS } from './genreColors'
 
 /**
- * 2D Scatter — chip-driven filter visualization.
+ * 2D Scatter — chip-driven salience visualization.
  *
- * All songs are always visible. Filtered-out items lose their genre colour
- * (rendered as a muted grey) and fade to low opacity; matched items keep the
- * genre colour at full opacity. A click on a point opens the song detail
- * modal directly; the "Cerca similars" action now lives inside that modal.
+ * Every point is rendered with visual properties (size, opacity, colour
+ * blend) driven continuously by its salience score in [0, 1]:
+ *
+ *   salience ≈ 0  →  small grey "ghost" (poor match)
+ *   salience ≈ 1  →  big saturated genre dot with halo (strong match)
+ *
+ * The frontend doesn't filter anything — low-salience points just recede
+ * visually. Without an active filter (no chips, no genre legend) every
+ * point gets salience 1.0 so the scatter shows the full coloured catalog.
+ *
+ * The genre legend still hard-filters via `activeIds`: a song that is
+ * excluded by the legend gets salience 0 regardless of its chip score.
  */
+const SALIENCE_GAMMA = 1.4   // colour contrast curve (higher = punchier)
+const RANK_GAMMA     = 1.3   // size contrast curve
+const GHOST_SIZE     = 0.7   // size multiplier at rank 0 / unfiltered point
+const NORMAL_SIZE    = 1.15  // size multiplier with no filter active
+const FILTER_TOP     = 1.75  // size multiplier at rank 1 *under* a filter,
+                             // intentionally bigger than NORMAL_SIZE so top
+                             // matches read as standing out from the cloud
+const HALO_ONSET     = 0.35  // salience above which a halo starts to grow
+const OUTLINE_ONSET  = 0.50  // salience above which a dark outline appears
+
+function lerp(a, b, t) { return a + (b - a) * t }
+
+function parseHexColor(hex) {
+  let h = hex.trim()
+  if (h.startsWith('rgb')) {
+    const m = h.match(/(\d+(\.\d+)?)/g)
+    return m ? [Number(m[0]), Number(m[1]), Number(m[2])] : [128, 128, 128]
+  }
+  if (h.startsWith('#')) h = h.slice(1)
+  if (h.length === 3) h = h.split('').map(c => c + c).join('')
+  const n = parseInt(h, 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+function lerpColor(a, b, t) {
+  const [r1, g1, b1] = parseHexColor(a)
+  const [r2, g2, b2] = parseHexColor(b)
+  return `rgb(${Math.round(lerp(r1, r2, t))},${Math.round(lerp(g1, g2, t))},${Math.round(lerp(b1, b2, t))})`
+}
+
 export default function Scatter2D({
-  points, activeIds, focalId,
+  points, activeIds, salienceMap, rankMap, focalId,
   highlightedId, onPointHover, onPointOpenDetail,
   // Legend doubles as the genre filter: clicking an item toggles a genre
   // chip in the parent's chip list. ``activeGenres`` is the list of slugs
@@ -84,8 +122,8 @@ export default function Scatter2D({
     const cs = getComputedStyle(document.documentElement)
     const labelInk = cs.getPropertyValue('--ink').trim() || '#15151A'
     const labelMute = cs.getPropertyValue('--ink-soft').trim() || '#5D6D7E'
-    // Filtered-out points: softer, lighter — they should recede into the
-    // background so the matched set can be read at a glance. Dark mode
+    // Ghost colour: what a salience-0 point looks like — the same muted
+    // grey the scatter has always used for filtered-out points. Dark mode
     // needs a lighter base colour + higher alpha because --ink-mute on
     // near-black is essentially invisible.
     const isDark = document.documentElement.dataset.theme === 'dark'
@@ -94,41 +132,71 @@ export default function Scatter2D({
       : (cs.getPropertyValue('--ink-mute').trim() || '#6B6B75')
     const dimAlpha = isDark ? 0.38 : 0.22
 
-    function drawDimNode(p) {
-      const { x: px, y: py } = pointToScreen(p, bt)
-      const r = NODE_R
-      ctx.beginPath()
-      ctx.arc(px, py, r * 0.7, 0, Math.PI * 2)
-      ctx.fillStyle = dimColor
-      ctx.globalAlpha = dimAlpha
-      ctx.fill()
-      ctx.globalAlpha = 1
+    // Resolve effective salience + rank for a song. Three filter
+    // dimensions stack:
+    //   1. No filter at all → everyone gets 1.0 (current "all colourful")
+    //   2. Legend filter only → in/out is boolean (1.0 or 0.0)
+    //   3. Chips active → salience and rank come from their maps; legend
+    //      still gates as a 0/1 multiplier on both.
+    //
+    // Returns {sal, rank}. `sal` drives colour/opacity (dimmed when the
+    // query is uninformative); `rank` drives size (always full range)
+    // so weak queries still show their relative ordering at a glance.
+    function getScores(p) {
+      if (!hasFilter) return { sal: 1.0, rank: 1.0 }
+      if (!activeIds.has(p.id)) return { sal: 0.0, rank: 0.0 }
+      const s = salienceMap?.get(p.id)
+      const r = rankMap?.get(p.id)
+      // Legend-only filter (no chips) ⇒ both default to 1: full colour, full size.
+      return {
+        sal:  s == null ? 1.0 : s,
+        rank: r == null ? (s == null ? 1.0 : s) : r,
+      }
     }
 
-    function drawActiveNode(p) {
-      // Matched points: bigger halo + fully opaque core + dark outline.
-      // The outline uses the theme's ink colour so each point reads as a
-      // crisp, solid mark against the dimmed background — the eye snaps
-      // to the active set instead of the noise of grey dots.
+    // Bigger top size only under a *similarity* filter (chips). The genre
+    // legend is a boolean categorical filter — its surviving points should
+    // still read at the normal scale, not balloon up to 1.75 NODE_R.
+    const topSize = salienceMap ? FILTER_TOP : NORMAL_SIZE
+
+    function drawPoint(p, sal, rank) {
+      const sv = Math.pow(Math.max(0, Math.min(1, sal)),  SALIENCE_GAMMA)
+      const rv = Math.pow(Math.max(0, Math.min(1, rank)), RANK_GAMMA)
+
       const { x: px, y: py } = pointToScreen(p, bt)
-      const color = genreColor(p.genre)
-      const r = NODE_R
+      const genre = genreColor(p.genre)
+      const coreR = NODE_R * lerp(GHOST_SIZE, topSize, rv)
 
+      // Halo — ramps in above HALO_ONSET on *salience* (we want the
+      // halo to convey confidence, not just relative position).
+      if (sv > HALO_ONSET) {
+        const haloT = (sv - HALO_ONSET) / (1 - HALO_ONSET)
+        ctx.beginPath()
+        ctx.arc(px, py, coreR * (1.4 + 0.55 * haloT), 0, Math.PI * 2)
+        ctx.fillStyle = genre
+        ctx.globalAlpha = 0.20 * haloT
+        ctx.fill()
+      }
+
+      // Core: blend grey ↔ genre colour driven by salience. The ×1.6
+      // multiplier lets saturation catch up faster than opacity so
+      // mid-salience points still read as "in the cluster".
+      const colour = lerpColor(dimColor, genre, Math.min(1, sv * 1.6))
       ctx.beginPath()
-      ctx.arc(px, py, r * 1.9, 0, Math.PI * 2)
-      ctx.fillStyle = color
-      ctx.globalAlpha = 0.18
+      ctx.arc(px, py, coreR, 0, Math.PI * 2)
+      ctx.fillStyle = colour
+      ctx.globalAlpha = lerp(dimAlpha, 1.0, sv)
       ctx.fill()
 
-      ctx.beginPath()
-      ctx.arc(px, py, r * 1.15, 0, Math.PI * 2)
-      ctx.fillStyle = color
-      ctx.globalAlpha = 1
-      ctx.fill()
-      ctx.strokeStyle = labelInk
-      ctx.globalAlpha = 0.55
-      ctx.lineWidth = 1
-      ctx.stroke()
+      // Outline only on confident matches.
+      if (sv > OUTLINE_ONSET) {
+        const outT = (sv - OUTLINE_ONSET) / (1 - OUTLINE_ONSET)
+        ctx.strokeStyle = labelInk
+        ctx.globalAlpha = 0.55 * outT
+        ctx.lineWidth = 1
+        ctx.stroke()
+      }
+
       ctx.globalAlpha = 1
     }
 
@@ -207,35 +275,28 @@ export default function Scatter2D({
       ctx.fillText(`${p.artist}`, px, py - r * 2.8 - 4 - labelSz - 2)
     }
 
-    // Layer 1 — dimmed (filtered-out) nodes, colour stripped.
-    if (hasFilter) {
-      for (const p of points) {
-        if (activeIds.has(p.id)) continue
-        if (p.id === highlightedId) continue
-        drawDimNode(p)
-      }
+    // Single pass sorted by salience ascending → high-salience points end
+    // up drawn on top of the ghost cloud. Focal and hover overlays come
+    // afterwards so they always win.
+    const drawOrder = points
+      .filter(p => p.id !== focalId && p.id !== highlightedId)
+      .map(p => ({ p, sc: getScores(p) }))
+      .sort((a, b) => a.sc.sal - b.sc.sal)
+
+    for (const { p, sc } of drawOrder) {
+      drawPoint(p, sc.sal, sc.rank)
     }
 
-    // Layer 2 — active nodes (or all if no filter), genre colour.
-    for (const p of points) {
-      if (p.id === highlightedId) continue
-      if (p.id === focalId) continue
-      if (hasFilter && !activeIds.has(p.id)) continue
-      drawActiveNode(p)
-    }
-
-    // Layer 3 — focal (diamond).
     if (focalId != null) {
       const fp = points.find(p => p.id === focalId)
       if (fp && fp.id !== highlightedId) drawFocalNode(fp)
     }
 
-    // Layer 4 — hovered.
     if (highlightedId != null) {
       const hp = points.find(p => p.id === highlightedId)
       if (hp) drawHoveredNode(hp)
     }
-  }, [points, activeIds, focalId, highlightedId, getBaseTransform])
+  }, [points, activeIds, salienceMap, rankMap, focalId, highlightedId, getBaseTransform])
 
   useEffect(() => { drawRef.current = draw }, [draw])
 

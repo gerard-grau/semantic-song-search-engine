@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useMemo, useRef } from 'react'
 import useTheme from './hooks/useTheme'
 import WelcomePage from './components/WelcomePage'
 import CercadorPage from './components/CercadorPage'
@@ -36,7 +36,12 @@ export default function App() {
   const [activeIds, setActiveIds] = useState(null)
   // Combined score per surviving song: arithmetic mean of its per-chip
   // scores. Stored separately so we don't recompute on every render.
+  // ``scoreMap`` holds the *salience* (drives opacity / colour, dimmed
+  // when the query is uninformative). ``rankMap`` holds the *relative
+  // position* (drives point size, undimmed) so weak queries still show
+  // which songs are relatively best at a glance.
   const [scoreMap, setScoreMap] = useState({})
+  const [rankMap, setRankMap] = useState({})
   // One score map per chip, in chip order. Lets the right panel break
   // the combined score back down into "boig: 0.81, amore: 0.74, …".
   const [chipScoreMaps, setChipScoreMaps] = useState([])
@@ -90,6 +95,41 @@ export default function App() {
         .sort((a, b) => b.score - a.score)
     : allSongs
 
+  // Salience map handed to the scatter. Only set when chips are present;
+  // genre legend alone uses pure in/out gating (no salience to interpolate).
+  const salienceMap = useMemo(() => {
+    if (chips.length === 0) return null
+    const m = new Map()
+    for (const id in scoreMap) m.set(Number(id), scoreMap[id])
+    return m
+  }, [scoreMap, chips.length])
+
+  // Rank map = relative position in [0, 1], untouched by discriminability.
+  // Drives the scatter's point size so weak queries still show a clear
+  // gradient (top of "animals" big, unrelated songs small) even when the
+  // overall colour is dim.
+  const rankSizeMap = useMemo(() => {
+    if (chips.length === 0) return null
+    const m = new Map()
+    for (const id in rankMap) m.set(Number(id), rankMap[id])
+    return m
+  }, [rankMap, chips.length])
+
+  // Display count: "X cançons rellevants" — songs that read as actually
+  // highlighted on the scatter (salience above STRONG_MATCH_THRESHOLD).
+  // For chip-less / genre-only filtering, fall back to the legend's exact
+  // subset size since every alive song is fully colored anyway.
+  const STRONG_MATCH_THRESHOLD = 0.30
+  const matchCount = useMemo(() => {
+    if (!finalActiveIds) return allSongs.length
+    if (!salienceMap) return finalActiveIds.size
+    let c = 0
+    for (const id of finalActiveIds) {
+      if ((salienceMap.get(id) ?? 0) >= STRONG_MATCH_THRESHOLD) c++
+    }
+    return c
+  }, [finalActiveIds, salienceMap, allSongs])
+
   const loadAll = useCallback(async () => {
     setIsLoading(true)
     setError(null)
@@ -99,6 +139,7 @@ export default function App() {
       setBaseProj2d(data.projections_2d)
       setActiveIds(null)
       setScoreMap({})
+      setRankMap({})
       setChipScoreMaps([])
       setChips([])
       setSelectedGenres([])
@@ -127,21 +168,28 @@ export default function App() {
   }
 
   // Re-run an ordered list of chips from scratch (used on add and remove).
-  // Returns the final alive set + per-chip score maps so the right panel
-  // can display a combined score and a per-chip breakdown.
+  // Returns the final alive set + per-chip score and rank maps so the
+  // right panel can display a combined score and the scatter can size
+  // points by rank independently from how it colours them by salience.
   async function applyChipsFromScratch(orderedChips) {
     let alive = null
     const perChipMaps = []
+    const perChipRankMaps = []
     let lastMessage = null
     for (const chip of orderedChips) {
       const data = await applyChip(chip, alive)
       const map = {}
-      data.songs.forEach(s => { map[s.id] = s.score ?? 0 })
+      const rmap = {}
+      data.songs.forEach(s => {
+        map[s.id]  = s.score ?? 0
+        rmap[s.id] = s.rank ?? s.score ?? 0
+      })
       perChipMaps.push(map)
+      perChipRankMaps.push(rmap)
       alive = data.songs.map(s => s.id)
       lastMessage = data.message ?? null
     }
-    return { alive, perChipMaps, lastMessage }
+    return { alive, perChipMaps, perChipRankMaps, lastMessage }
   }
 
   async function handleAddChip(text) {
@@ -180,6 +228,7 @@ export default function App() {
       setChips([])
       setActiveIds(null)
       setScoreMap({})
+      setRankMap({})
       setChipScoreMaps([])
       aliveIdsRef.current = null
       setMessage(null)
@@ -192,20 +241,24 @@ export default function App() {
     setIsLoading(true)
     setError(null)
     try {
-      const { alive, perChipMaps, lastMessage } = await applyChipsFromScratch(newChips)
+      const { alive, perChipMaps, perChipRankMaps, lastMessage } = await applyChipsFromScratch(newChips)
       aliveIdsRef.current = alive
       setActiveIds(new Set(alive))
-      // Combined score = arithmetic mean of per-chip scores. Every remaining
-      // chip kind is a ranking chip now (the genre filter lives outside the
-      // chip pipeline) so the mean is just over all chips.
+      // Combined score = arithmetic mean of per-chip scores; same for rank.
       const combined = {}
+      const combinedRank = {}
       for (const id of alive) {
-        if (newChips.length === 0) { combined[id] = 1; continue }
-        let sum = 0
-        for (let i = 0; i < newChips.length; i++) sum += (perChipMaps[i][id] ?? 0)
-        combined[id] = sum / newChips.length
+        if (newChips.length === 0) { combined[id] = 1; combinedRank[id] = 1; continue }
+        let sum = 0, rsum = 0
+        for (let i = 0; i < newChips.length; i++) {
+          sum  += (perChipMaps[i][id]     ?? 0)
+          rsum += (perChipRankMaps[i][id] ?? 0)
+        }
+        combined[id]     = sum  / newChips.length
+        combinedRank[id] = rsum / newChips.length
       }
       setScoreMap(combined)
+      setRankMap(combinedRank)
       setChipScoreMaps(perChipMaps)
       setChips(newChips)
       setMessage(lastMessage)
@@ -220,6 +273,7 @@ export default function App() {
   function handleReset() {
     setActiveIds(null)
     setScoreMap({})
+    setRankMap({})
     setChipScoreMaps([])
     setChips([])
     setSelectedGenres([])
@@ -254,7 +308,6 @@ export default function App() {
     )
   }
 
-  const activeCount = finalActiveIds ? finalActiveIds.size : allSongs.length
   const isFiltered  = finalActiveIds != null
 
   return (
@@ -322,7 +375,7 @@ export default function App() {
           <div className="viz-bar viz-bar--controls">
             <span className="viz-count">
               {isFiltered ? (
-                <><strong>{activeCount}</strong> / {allSongs.length} cançons</>
+                <><strong>{matchCount}</strong> {salienceMap ? 'rellevants' : 'cançons'} / {allSongs.length}</>
               ) : (
                 <><strong>{allSongs.length}</strong> cançons al mapa</>
               )}
@@ -333,6 +386,8 @@ export default function App() {
             <Scatter2D
               points={baseProj2d}
               activeIds={finalActiveIds}
+              salienceMap={salienceMap}
+              rankMap={rankSizeMap}
               focalId={focalSimilarId}
               highlightedId={highlightedId}
               onPointHover={setHighlightedId}

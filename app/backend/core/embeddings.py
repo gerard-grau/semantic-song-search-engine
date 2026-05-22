@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 # Re-bound at module level so existing callers (and tests) can keep using
 # ``from app.backend.core.embeddings import GENRE_WEIGHT`` etc.
 GENRE_WEIGHT                  = config.GENRE_WEIGHT
-QUERY_PERCENTILE              = config.QUERY_PERCENTILE
+QUERY_DISCRIM_REF             = config.QUERY_DISCRIM_REF
+QUERY_DISCRIM_FLOOR           = config.QUERY_DISCRIM_FLOOR
 SIMILAR_PERCENTILE            = config.SIMILAR_PERCENTILE
 SIMILAR_FIELDS                = config.SIMILAR_FIELDS
 SIMILAR_FIELD_POWER           = config.SIMILAR_FIELD_POWER
@@ -110,6 +111,10 @@ def filter_embeddings_fast(
     sims = (matrix.reshape(N * F, D) @ q).reshape(N, F)
     sims = np.clip(sims, -1.0, 1.0).astype(np.float64)
 
+    # Raw best-field cosine per song — the absolute similarity used by
+    # QUERY_SCORE_FLOOR. Invalid fields are masked out so they can't win.
+    raw_max = np.where(valid, sims, -np.inf).max(axis=1)
+
     # Per-field mean across the full catalog (masking missing fields so
     # they don't drag the mean toward 0). Independent of song_ids — same
     # query → same mean, regardless of which chips ran before.
@@ -152,27 +157,41 @@ def filter_embeddings_fast(
                     else:
                         norm_scores = boosted
 
-    # Global threshold + intersect with the alive subset.
-    threshold = float(np.percentile(norm_scores, QUERY_PERCENTILE))
-    keep_global = norm_scores >= threshold
+    # Compute discriminability: how much does the best song stand above the
+    # typical one? Robust to outliers (a few strong matches lift it; a few
+    # very-weak matches don't). When the spread is wide (cliff query like
+    # "oques grasses") this is 1.0; when scores are tight (uninformative
+    # query like "música") it drops, dimming the entire visualisation.
+    finite_mask = np.isfinite(raw_max)
+    if int(finite_mask.sum()) >= 2:
+        rmax_finite = raw_max[finite_mask]
+        contrast = float(max(0.0, rmax_finite.max() - np.median(rmax_finite)))
+        discriminability = max(
+            QUERY_DISCRIM_FLOOR,
+            min(1.0, contrast / QUERY_DISCRIM_REF),
+        )
+    else:
+        discriminability = QUERY_DISCRIM_FLOOR
+
+    # Salience drives opacity / colour: it dims the entire viz when the
+    # query is uninformative. Rank (= norm_scores, untouched by
+    # discriminability) drives point SIZE so even a poor query still
+    # shows which songs are *relatively* the best ones — without rank,
+    # uninformative queries would render every point too small to read.
+    salience = norm_scores * discriminability
 
     in_subset = np.zeros(N, dtype=bool)
     in_subset[sub_idx] = True
-    keep = keep_global & in_subset
+    subset_indices = np.where(in_subset)[0]
+    if subset_indices.size == 0:
+        return []
 
-    if not keep.any():
-        # Fallback: take the single best row inside the subset so the chip
-        # never wipes the alive set to zero on its own.
-        sub_scores = np.where(in_subset, norm_scores, -np.inf)
-        keep = np.zeros(N, dtype=bool)
-        keep[int(np.argmax(sub_scores))] = True
-
-    survivors = [
-        (int(i), float(round(norm_scores[i], 4)))
-        for i in np.where(keep)[0]
+    order = np.argsort(-salience[subset_indices], kind="stable")
+    ordered = subset_indices[order]
+    return [
+        (int(i), float(round(salience[i], 4)), float(round(norm_scores[i], 4)))
+        for i in ordered
     ]
-    survivors.sort(key=lambda t: t[1], reverse=True)
-    return survivors
 
 
 def filter_by_similarity_fast(

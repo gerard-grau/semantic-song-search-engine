@@ -52,8 +52,28 @@ class FilterRequest(BaseModel):
     song_ids: list[int] | None = None   # None → start from all songs
 
 
+class ScoreItem(BaseModel):
+    """Lightweight (id, salience, rank) tuple returned by /api/filter.
+
+    The frontend already has the full SongResult cached from /api/songs,
+    so filter responses only need to ship the score updates.
+
+    ``score`` is the *salience* — the value the scatter uses for opacity
+    and colour saturation; it's already dimmed by query discriminability,
+    so an uninformative query (e.g. "música") produces low scores for
+    everyone. ``rank`` is the *relative position* (norm_score in [0, 1]),
+    independent of discriminability, and drives point SIZE: even in a
+    weak query, the relatively-best songs still render at full size so
+    the user can locate them. For similar-to-song chips the two are
+    identical (no discriminability concept).
+    """
+    id: int
+    score: float
+    rank: float = 0.0
+
+
 class FilterResponse(BaseModel):
-    songs: list[SongResult]
+    songs: list[ScoreItem]
     projections_2d: list[Point2D]
     total_remaining: int
     message: str | None = None

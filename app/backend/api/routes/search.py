@@ -11,6 +11,7 @@ from app.backend.api.schemas import (
     NeighborsRequest,
     NeighborsResponse,
     Point2D,
+    ScoreItem,
     SongDetail,
     SongResult,
 )
@@ -78,23 +79,28 @@ def filter_songs(body: FilterRequest):
             song_ids=body.song_ids,
             index=index,
         )
+        # Song-to-song similarity has no discriminability concept — every
+        # survivor passed the percentile, so salience = rank = score.
+        items = [
+            ScoreItem(id=songs[idx]["id"], score=s, rank=s) for idx, s in scored
+        ]
     else:
         scored = filter_embeddings_fast(
             query_text=body.query,
             song_ids=body.song_ids,
             index=index,
         )
+        # Text-query path returns (idx, salience, rank).
+        items = [
+            ScoreItem(id=songs[idx]["id"], score=sal, rank=rk)
+            for idx, sal, rk in scored
+        ]
 
-    survivors = [{**songs[idx], "score": score} for idx, score in scored]
-    n = len(survivors)
+    n = len(items)
     message = f"Explora les {n} cançons per tu" if n <= 5 else None
 
-    # The frontend scatter always uses the pre-computed 2D projections from
-    # /api/songs and dims/highlights points by id, so /filter no longer
-    # recomputes a t-SNE for the survivors — that was the dominant cost on
-    # large surviving sets (seconds for n≈2500).
     return FilterResponse(
-        songs=[_to_result(s) for s in survivors],
+        songs=items,
         projections_2d=[],
         total_remaining=n,
         message=message,

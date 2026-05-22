@@ -50,7 +50,7 @@ PIPELINE_GENRE_MODE = "soft"
 # Contribution to squared distance is exactly alpha² × text. alpha=2.0 ≈
 # 80% genre / 20% text in squared-distance terms — visible genre clusters
 # without erasing within-genre semantics.
-PIPELINE_ALPHA_GENRE = 0.2
+PIPELINE_ALPHA_GENRE = 0.18
 
 
 # ============================================================================
@@ -61,11 +61,31 @@ PIPELINE_ALPHA_GENRE = 0.2
 # score. Genre nudges the ranking but never overrides the text signal.
 GENRE_WEIGHT = 0.15
 
-# Percentile cut-offs on normalised scores.
-# QUERY_PERCENTILE — text-query chip keeps only the top ~10% so the scatter
-# feels selective. SIMILAR_PERCENTILE — similar-to-song chip stays broad so
-# stacking 3-4 chips intersects to a meaningful "similar to all of these" set.
-QUERY_PERCENTILE = 90.0
+# Text-query chip (filter_embeddings_fast) now returns a per-song *salience*
+# in [0, 1] instead of a hard top-N filter. Salience drives the scatter's
+# opacity / size / colour continuously: bright song = strong match, ghost
+# = poor match.
+#
+#   salience[i] = norm_scores[i] × discriminability
+#
+# where discriminability is a *global* scalar measuring how informative the
+# query is — high when there are clear winners, low when every song scores
+# about the same. Without it, min-max normalisation would always paint a
+# bright "top" even on queries like "música" that don't really discriminate.
+#
+# discriminability = clip( (max(raw_max) − median(raw_max)) / DISCRIM_REF,
+#                          DISCRIM_FLOOR, 1.0 )
+#
+# QUERY_DISCRIM_REF — required (top − median) raw-cosine gap for full
+# discriminability. 0.15 ≈ "the best beats the typical song by 15 cosine
+# points". Below that we proportionally dim everything.
+# QUERY_DISCRIM_FLOOR — lower bound so a non-discriminating query still
+# leaves the top barely visible instead of going fully grey.
+QUERY_DISCRIM_REF   = 0.15
+QUERY_DISCRIM_FLOOR = 0.05
+
+# SIMILAR_PERCENTILE — similar-to-song chip stays broad so stacking 3-4 chips
+# intersects to a meaningful "similar to all of these" set.
 SIMILAR_PERCENTILE = 50.0
 
 # Song-to-song similarity scoring (filter_by_similarity_fast).
