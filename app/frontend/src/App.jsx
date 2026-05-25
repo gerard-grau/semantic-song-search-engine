@@ -24,6 +24,18 @@ import './App.css'
 // locally (every song already carries its genre from /api/songs). It is
 // not a chip: there's no round-trip, no scoring, no embedding — just a
 // metadata filter visualised by the legend highlight.
+//
+// When a genre IS selected, the scatter's salience is recomputed *within*
+// that genre (see ``genreAdjustedMap``): the same shape as the backend
+// salience (min-max × discriminability) but over the in-genre survivors
+// only, working off each song's ``rank`` (catalog norm_score ∈ [0, 1]).
+// GENRE_DISCRIM_REF is the (max − median) rank gap at which a within-genre
+// standout reaches full brightness; FLOOR mirrors config.py
+// QUERY_DISCRIM_FLOOR so a genre where nothing stands out for the query
+// stays at the same neutral level it had catalog-wide (no blind stretch).
+const GENRE_DISCRIM_REF   = 0.12
+const GENRE_DISCRIM_FLOOR = 0.5
+
 export default function App() {
   const { theme, toggleTheme } = useTheme()
 
@@ -91,6 +103,45 @@ export default function App() {
     return out
   }, [activeIds, selectedGenres, allSongs])
 
+  // Genre-local salience. With no genre selected — or before any chip has
+  // produced scores — this is just ``filterMap`` (catalog-wide, as before).
+  // With genre(s) selected, every surviving song's salience / rank is
+  // recomputed over the in-genre survivors only, so a song that stands out
+  // *within* its genre brightens even if it's mediocre catalog-wide, while
+  // a genre where nothing stands out for the query doesn't change at all.
+  const genreAdjustedMap = useMemo(() => {
+    if (selectedGenres.length === 0 || chips.length === 0 || !finalActiveIds) {
+      return filterMap
+    }
+    const ids = [...finalActiveIds]
+    if (ids.length === 0) return filterMap
+    const ranks = ids.map(id => filterMap[id]?.rank ?? 0)
+    let rMin = Infinity, rMax = -Infinity
+    for (const r of ranks) {
+      if (r < rMin) rMin = r
+      if (r > rMax) rMax = r
+    }
+    const spread = rMax - rMin
+    // Robust "does anything stand out?" contrast: top minus median. A lone
+    // standout lifts the max while the median stays put (→ it brightens);
+    // a uniform genre keeps contrast ≈ 0, so discriminability collapses to
+    // the FLOOR and the view matches its catalog-wide appearance.
+    const sorted = [...ranks].sort((a, b) => a - b)
+    const mid = sorted.length >> 1
+    const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+    const discrim = Math.min(1, Math.max(GENRE_DISCRIM_FLOOR, Math.max(0, rMax - median) / GENRE_DISCRIM_REF))
+    const out = {}
+    for (let i = 0; i < ids.length; i++) {
+      const norm = spread > 1e-6 ? (ranks[i] - rMin) / spread : 0.5
+      out[ids[i]] = { sal: norm * discrim, rank: norm }
+    }
+    return out
+  }, [selectedGenres, chips.length, finalActiveIds, filterMap])
+
+  // The right-panel list shows the ABSOLUTE match % (catalog-wide salience
+  // from `filterMap`) and sorts by it — never the genre-local value. The
+  // within-genre recompute (`genreAdjustedMap`) drives ONLY the scatter's
+  // opacity / size, so the reported % stays a true catalog-wide similarity.
   const displaySongs = useMemo(() => {
     if (!finalActiveIds) return allSongs
     return allSongs
@@ -99,11 +150,12 @@ export default function App() {
       .sort((a, b) => b.score - a.score)
   }, [finalActiveIds, allSongs, filterMap])
 
-  // Scatter2D consumes `filterMap` directly (plain object, indexed by id).
+  // Scatter2D consumes the score map directly (plain object, indexed by id).
   // `null` means "no chip filter active" so every visible point renders
   // at full salience / size — the genre legend, if any, gates via
-  // `activeIds` separately.
-  const filterScores = chips.length === 0 ? null : filterMap
+  // `activeIds` separately. When a genre IS selected we hand it the
+  // genre-local map so opacity / size reflect within-genre ranking.
+  const filterScores = chips.length === 0 ? null : genreAdjustedMap
 
   // Display count: "X cançons rellevants" — songs that read as actually
   // highlighted on the scatter (salience above STRONG_MATCH_THRESHOLD).

@@ -683,11 +683,12 @@
               transform var(--t-fast) var(--ease),
               box-shadow var(--t-fast) var(--ease);
 }
-.result-card:hover {
-  border-color: var(--line-strong);
-  box-shadow: var(--shadow-sm);
-  transform: translateX(2px);
-}
+/* Hover and "active" (highlighted from the scatter) share one look: the
+   genre-coloured outline + the small slide. Previously `:hover` set a grey
+   border and had higher specificity than `--active`, so it overrode the
+   coloured outline — the colour flashed and vanished. Merging them means
+   hovering a card always shows the coloured rectangle. */
+.result-card:hover,
 .result-card--active {
   border-color: var(--genre-color);
   box-shadow: 0 0 0 1px var(--genre-color) inset, var(--shadow-sm);
@@ -723,15 +724,12 @@
   letter-spacing: 0.01em;
   line-height: 1;
 }
-.result-card:hover .result-rank {
-  background: var(--ink);
-  border-color: var(--ink);
-}
-.result-card:hover .result-rank-num { color: var(--bg); }
+.result-card:hover .result-rank,
 .result-card--active .result-rank {
   background: var(--genre-color);
   border-color: var(--genre-color);
 }
+.result-card:hover .result-rank-num,
 .result-card--active .result-rank-num { color: #fff; }
 
 .result-body {
