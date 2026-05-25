@@ -341,6 +341,7 @@ def compute_cercador_suggestions(
     exclude_artist_names: set[str] | None = None,
     suggestions_k: int = config.CERCADOR_SUGGESTIONS_K,
     lyrics_extra_k: int = config.CERCADOR_LYRICS_EXTRA_K,
+    mode: str = "all",
 ) -> dict:
     """Embedding-based smart-suggestions companion to /api/cercador.
 
@@ -389,6 +390,26 @@ def compute_cercador_suggestions(
       info about the music — so below 0.60 cosines are mostly incidental
       letter overlap, not real matches. Length 0 or 1.
 
+    ``mode`` mirrors the Cercador's three search surfaces so the matrix
+    fallback produces the same three-way split the Qdrant path does
+    (Qdrant searches a different collection per mode; here we score a
+    different field) — without it the three buttons returned identical
+    results whenever Qdrant was unavailable:
+
+      * ``"qualitative"`` (Temàtica) → score the qualitative_description
+        field only.
+      * ``"lyrics"`` (Lletra) → score the lyrics field only.
+      * ``"title"`` (Títol) → score the title field only.
+      * ``"all"`` / anything else → max over SUGGESTION_FIELDS (legacy).
+
+    ``mode`` only picks the suggestions field. The ``lyrics_extra`` slot is
+    ALWAYS computed regardless of mode (the 2 best embedding songs appended
+    to the lexical Lletres column). ``exclude_ids`` prunes ONLY
+    ``lyrics_extra`` — it shares the Lletres column with the lexical hits,
+    so the extras must not repeat them. The suggestions slot is left
+    completely independent of the lexical results (a song may appear both
+    there and in the lexical column).
+
     Returns ``(row_idx, raw_cosine)`` pairs for the song-based slots and
     ``(artist_name, raw_cosine)`` for ``group_extra``. ``raw_cosine`` is
     the best-field cosine (clamped to [0, 1] by the route layer) so the
@@ -427,7 +448,15 @@ def compute_cercador_suggestions(
     # per-field mean centering. Title/artist/album are excluded by
     # restricting to SUGGESTION_FIELDS.
     suggestions: list[tuple[int, float]] = []
-    sug_fields = [f for f in SUGGESTION_FIELDS if f < F]
+    # Mode picks which field(s) feed the Suggeriments slot — mirrors the
+    # Qdrant collection routing so the three buttons differ even on the
+    # matrix fallback. Field order (EMBEDDING_FIELD_COLUMNS): 0=lyrics,
+    # 1=qualitative_description, 2=title. Unknown / "all" → legacy set.
+    _mode_field = {"qualitative": 1, "lyrics": 0, "title": 2}.get(mode)
+    if _mode_field is not None and _mode_field < F:
+        sug_fields = [_mode_field]
+    else:
+        sug_fields = [f for f in SUGGESTION_FIELDS if f < F]
     if sug_fields:
         sims = field_sims[:, sug_fields]          # (N, k) raw cosines
         v    = valid[:, sug_fields]               # (N, k) per-field validity
@@ -445,9 +474,10 @@ def compute_cercador_suggestions(
         raw_max = np.where(v, sims, -np.inf).max(axis=1)  # (N,)
 
         keep = np.isfinite(ranking) & (raw_max >= SUGGESTION_COSINE_FLOOR)
-        for pos in excluded_pos:
-            keep[pos] = False
-
+        # Suggestions are INDEPENDENT of the lexical results — deliberately
+        # NOT pruned by excluded_pos (those only prune lyrics_extra, which
+        # shares the Lletres column with the lexical hits). A song may show
+        # both as a lexical hit and as a Suggeriment.
         n_keep = int(keep.sum())
         if n_keep > 0:
             ranking_masked = np.where(keep, ranking, -np.inf)
@@ -465,6 +495,9 @@ def compute_cercador_suggestions(
     # so we don't restrict to SUGGESTION_FIELDS — a strong title/artist
     # cosine here means the lexical match missed it (probably a typo or
     # an unusual normalisation), which is exactly what we want to surface.
+    # ALWAYS computed regardless of mode: these are the 2 best embedding
+    # songs appended to the lexical Lletres column, and exclude_ids keeps
+    # them from repeating the lexical hits already in that same column.
     full_sims = np.where(valid, field_sims, -np.inf)
     max_sims = full_sims.max(axis=1)              # (N,)
     for pos in excluded_pos:

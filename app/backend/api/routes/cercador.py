@@ -29,6 +29,7 @@ import logging
 import numpy as np
 from fastapi import APIRouter
 
+import config
 from app.backend.core.cercador_index import derive_correction, get_index
 from app.backend.core.data_loader import get_visible_index
 from app.backend.core.embeddings import (
@@ -188,7 +189,7 @@ def cercador_suggestions(
 
     # ── Matrix mode: bypass Qdrant entirely ───────────────────────────────────
     if mode == "matrix":
-        return _matrix_suggestions(q, excluded_ids, excluded_names)
+        return _matrix_suggestions(q, excluded_ids, excluded_names, mode)
 
     # ── Qdrant path ────────────────────────────────────────────────────────────
     qdrant_result = _qdrant_suggestions(q, excluded_ids, excluded_names, artist_filter, mode)
@@ -196,7 +197,7 @@ def cercador_suggestions(
         return qdrant_result
 
     # ── Matrix fallback (Qdrant unavailable) ──────────────────────────────────
-    return _matrix_suggestions(q, excluded_ids, excluded_names)
+    return _matrix_suggestions(q, excluded_ids, excluded_names, mode)
 
 
 # ── Qdrant path helpers ────────────────────────────────────────────────────────
@@ -210,10 +211,13 @@ def _qdrant_suggestions(
 ) -> dict | None:
     """Try Qdrant; return a complete response dict or None if unavailable.
 
-    mode controls which collections are searched:
-      "all"         — qualitative + lyrics chunks (default)
-      "lyrics"      — lyrics chunks only (passage matching)
-      "qualitative" — qualitative descriptions only (theme/mood)
+    ``mode`` selects the collection feeding the (independent) Suggeriments
+    slot:
+      "qualitative" / "all" — qualitative descriptions (theme/mood)
+      "lyrics"              — lyrics chunks (hybrid + cross-encoder rerank)
+      "title"               — title vector
+    The lyrics_extra slot (the 2 songs appended to the lexical Lletres
+    column) is ALWAYS populated from the lyrics chunks, independent of mode.
     """
     from app.backend.core import qdrant_search  # lazy import — avoids startup cost
 
@@ -232,33 +236,45 @@ def _qdrant_suggestions(
         logger.warning("Encoder unavailable for Qdrant path (%s)", exc)
         return None
 
-    use_qual   = mode in ("all", "qualitative")
-    use_lyrics = mode in ("all", "lyrics")
-    use_title  = mode == "title"
-
-    qual_results: list[dict] | None = []
-    if use_qual:
-        qual_results = qdrant_search.search_qualitative(
-            q_vec, limit=7, artist_filter=artist_filter, exclude_ids=excluded_ids,
-        )
-
-    lyrics_results: list[dict] | None = []
-    if use_lyrics:
-        lyrics_results = qdrant_search.search_lyrics_chunks(
-            q_vec, limit=7, artist_filter=artist_filter, exclude_ids=excluded_ids,
+    # ── Suggestions slot: mode-controlled and INDEPENDENT of the lexical
+    #    results (exclude_ids=set()). The Suggeriments column stands on its
+    #    own, so a song may appear both here and in the lexical Lletres
+    #    column — we deliberately don't prune it against the keyword hits.
+    #       "qualitative" → qualitative_description vector
+    #       "lyrics"      → lyrics chunks (hybrid + CE rerank)
+    #       "title"       → title vector
+    if mode == "lyrics":
+        sugg_results = qdrant_search.search_lyrics_chunks(
+            q_vec, limit=7, artist_filter=artist_filter, exclude_ids=set(),
             query_text=q,
         )
-
-    title_results: list[dict] | None = []
-    if use_title:
-        # Title mode doesn't exclude lexical hits — the user explicitly asked
-        # "what's titled X?", so the answer should appear even if Lletres
-        # already has it.
-        title_results = qdrant_search.search_by_title(
+    elif mode == "title":
+        sugg_results = qdrant_search.search_by_title(
+            q_vec, limit=7, artist_filter=artist_filter, exclude_ids=set(),
+        )
+    else:  # "all" / "qualitative"
+        sugg_results = qdrant_search.search_qualitative(
             q_vec, limit=7, artist_filter=artist_filter, exclude_ids=set(),
         )
 
-    if qual_results is None or lyrics_results is None or title_results is None:
+    # ── Lyrics-extra slot: ALWAYS present (the 2 best lyrics embedding
+    #    songs), appended to the lexical Lletres column with exclude_ids so
+    #    they never repeat a lexical hit in that same column. In lyrics mode
+    #    we reuse the suggestions search (just dropping lexical ids) to avoid
+    #    a second, expensive lyrics + cross-encoder pass.
+    extra_k = config.CERCADOR_LYRICS_EXTRA_K
+    if mode == "lyrics":
+        lyrics_extra_src = (
+            None if sugg_results is None
+            else [r for r in sugg_results if r["id"] not in excluded_ids]
+        )
+    else:
+        lyrics_extra_src = qdrant_search.search_lyrics_chunks(
+            q_vec, limit=extra_k + 3, artist_filter=artist_filter,
+            exclude_ids=excluded_ids, query_text=q,
+        )
+
+    if sugg_results is None or lyrics_extra_src is None:
         # Qdrant became unavailable mid-request; fall back to matrix
         return None
 
@@ -279,20 +295,8 @@ def _qdrant_suggestions(
             "lyrics_snippet": r.get("lyrics_snippet") or meta.get("lyrics_snippet", ""),
         }
 
-    # Route results to the right slots depending on mode:
-    #   "qualitative" → qualitative description → suggestions
-    #   "lyrics"      → lyrics chunks (CE reranked) → suggestions
-    #   "title"       → title embedding → suggestions
-    #   "all"         → qualitative → suggestions, lyrics → lyrics_extra
-    if mode == "lyrics":
-        suggestions  = [_enrich(r) for r in lyrics_results]
-        lyrics_extra = []
-    elif mode == "title":
-        suggestions  = [_enrich(r) for r in title_results]
-        lyrics_extra = []
-    else:  # "all" or "qualitative"
-        suggestions  = [_enrich(r) for r in qual_results]
-        lyrics_extra = [_enrich(r) for r in lyrics_results]
+    suggestions  = [_enrich(r) for r in sugg_results]
+    lyrics_extra = [_enrich(r) for r in lyrics_extra_src[:extra_k]]
 
     # group_extra via artist embedding column (one matmul, no second encode)
     group_extra = []
@@ -307,8 +311,17 @@ def _matrix_suggestions(
     q: str,
     excluded_ids: set[int],
     excluded_names: set[str],
+    mode: str = "all",
 ) -> dict:
-    """Existing matrix-based fallback (top-5000 visible songs)."""
+    """Existing matrix-based fallback (top-5000 visible songs).
+
+    ``mode`` ("qualitative" / "lyrics" / "title") selects which embedding
+    field feeds the suggestions slot so the three Cercador buttons differ
+    here too, not just on the Qdrant path. The explicit "matrix" bypass and
+    the legacy default both map to "all" (multi-field max).
+    """
+    if mode == "matrix":
+        mode = "all"
     try:
         index = get_visible_index()
     except Exception as exc:  # noqa: BLE001
@@ -320,6 +333,7 @@ def _matrix_suggestions(
         index=index,
         exclude_ids=excluded_ids,
         exclude_artist_names=excluded_names,
+        mode=mode,
     )
     songs = index["songs"]
 
