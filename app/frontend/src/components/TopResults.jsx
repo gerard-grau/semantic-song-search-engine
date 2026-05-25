@@ -54,12 +54,17 @@ function exportSongsCsv(rows, filename) {
   URL.revokeObjectURL(url)
 }
 
+// How many results render at once — the initial batch and the size of each
+// "veure'n més" step. 50 so most queries show their full relevant set
+// without paging.
+const PAGE_SIZE = 50
+
 export default function TopResults({
   songs, message, query,
   chips = [], chipScoreMaps = [],
   onSongHover, onSongClick, highlightedId,
 }) {
-  const [visibleCount, setVisibleCount] = useState(12)
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   // Open breakdown: { songId, x, y } — viewport coords of the score
   // ring's centre-right edge. Null = closed.
   const [breakdown, setBreakdown] = useState(null)
@@ -114,7 +119,7 @@ export default function TopResults({
   }, [exportOpen])
 
   function handleShowMore() {
-    setVisibleCount(prev => prev + 12)
+    setVisibleCount(prev => prev + PAGE_SIZE)
   }
 
   // Close the popover on any layout shift — scrolling the results panel
@@ -315,12 +320,12 @@ export default function TopResults({
         {hasMore && (
           <button className="show-more-btn" onClick={handleShowMore}>
             Veure'n més
-            <span className="show-more-count">+{Math.min(12, songs.length - visibleCount)}</span>
+            <span className="show-more-count">+{Math.min(PAGE_SIZE, songs.length - visibleCount)}</span>
           </button>
         )}
       </ol>
 
-      {!hasMore && songs.length > 12 && (
+      {!hasMore && songs.length > PAGE_SIZE && (
         <p className="results-footnote">Mostrant les {songs.length} cançons</p>
       )}
 
